@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>桌面宠物</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="/main.js"></script>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="empty">
+        <div class="big">🐾</div>
+        <div>点左上角「上传宠物」添加第一只</div>
+      </div>
+    </div>
+
+    <div id="panel">
+      <h1><span class="dot"></span>桌面宠物 <small>v1.7</small></h1>
+      <div class="row">
+        <button class="primary" id="uploadBtn">+ 上传宠物</button>
+        <button id="collapseBtn">收起</button>
+      </div>
+      <input type="file" id="file" accept="image/*" multiple style="display: none" />
+      <div class="hint">支持 PNG / JPG，透明背景 PNG 最自然。可一次选多张 = 多只宠物。</div>
+
+      <div class="section-title">提醒</div>
+      <div id="reminderList"></div>
+      <button id="addReminder" class="add-btn">+ 新增提醒</button>
+      <div class="hint">提醒时宠物会跳到屏幕中央喊你。时间 / 话语 / 重复频率都由你定。</div>
+      <div class="hint brand">🐭 黑鼠制作</div>
+    </div>
+
+    <button id="toggleBtn">🐾</button>
+    <div id="brand">🐭 黑鼠制作</div>
+  </body>
+</html>
