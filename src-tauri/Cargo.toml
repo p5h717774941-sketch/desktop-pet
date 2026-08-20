@@ -1,6 +1,6 @@
 [package]
 name = "pet-desktop"
-version = "1.9.0"
+version = "1.9.2"
 description = "Pinkmo - Desktop Pet"
 authors = ["Pinkmo"]
 edition = "2021"
