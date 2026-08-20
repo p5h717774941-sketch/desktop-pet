@@ -647,10 +647,16 @@ function fireAlert(msg, kind) {
 
 // ===== 启动 =====
 async function init() {
-  try {
-    await getCurrentWindow().setIgnoreCursorEvents(true);
-  } catch (e) {
-    console.warn("穿透不可用，可能缺少权限", e);
+  // 仅 macOS 开启"默认全窗穿透 + 全局钩子动态切换"；
+  // Windows/Linux 没有对应的全局鼠标钩子，若开启穿透将永远点不到宠物，
+  // 因此保持窗口默认可交互（透明空白区会挡住桌面点击，属已知取舍）
+  const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+  if (isMac) {
+    try {
+      await getCurrentWindow().setIgnoreCursorEvents(true);
+    } catch (e) {
+      console.warn("穿透不可用，可能缺少权限", e);
+    }
   }
   await initStore();
   applySettingsToUI();

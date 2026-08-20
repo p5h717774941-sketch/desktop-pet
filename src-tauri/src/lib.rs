@@ -127,6 +127,16 @@ mod macos {
                 eprintln!(
                     "[pet] 创建鼠标钩子失败（可能需要在 系统设置→隐私与安全性→辅助功能 中为本程序授权）"
                 );
+                // 降级：钩子没了就无法动态切换，先把窗口恢复为可交互，
+                // 避免窗口永远处于穿透状态导致宠物点不到
+                if let Some(app) = APP.get() {
+                    if let Some(win) = app.get_webview_window("main") {
+                        let _ = win.set_ignore_cursor_events(false);
+                    }
+                }
+                if let Some(s) = STATE.get() {
+                    s.lock().unwrap().ignore = false;
+                }
                 return;
             }
         };
