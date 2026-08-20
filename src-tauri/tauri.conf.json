@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "桌面宠物",
-  "version": "0.1.0",
-  "identifier": "cc.hacikis.pet",
+  "productName": "Pinkmo",
+  "version": "1.9.0",
+  "identifier": "cc.pinkmo.pet",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "桌面宠物",
+        "title": "Pinkmo",
         "width": 400,
         "height": 400,
         "transparent": true,

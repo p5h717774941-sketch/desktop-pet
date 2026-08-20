@@ -32,3 +32,4 @@ src-tauri/target/release/bundle/
 *.app
 *.dmg
 *.exe
+*.zip

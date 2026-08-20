@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>桌面宠物</title>
+    <title>Pinkmo</title>
     <link rel="stylesheet" href="styles.css" />
     <script type="module" src="/main.js"></script>
   </head>
@@ -11,18 +11,41 @@
     <div id="stage">
       <div id="empty">
         <div class="big">🐾</div>
-        <div>点左上角「上传宠物」添加第一只</div>
+        <div class="txt">点左上角「上传宠物」添加第一只</div>
       </div>
     </div>
 
     <div id="panel">
-      <h1><span class="dot"></span>桌面宠物 <small>v1.7</small></h1>
+      <h1><span class="dot"></span>Pinkmo <small>v1.9</small></h1>
       <div class="row">
         <button class="primary" id="uploadBtn">+ 上传宠物</button>
         <button id="collapseBtn">收起</button>
       </div>
+
+      <div id="modePicker" class="mode-picker" style="display: none">
+        <button class="mode-btn" id="modeImage">
+          <span class="m-name">单图模式</span>
+          <span class="m-desc">上传照片直接用</span>
+        </button>
+        <button class="mode-btn" id="modeSpriteDemo">
+          <span class="m-name">2D 灵动 · 示例</span>
+          <span class="m-desc">内置小精灵，先试效果</span>
+        </button>
+        <button class="mode-btn" id="modeSpriteUpload">
+          <span class="m-name">2D 灵动 · 自定义</span>
+          <span class="m-desc">传帧图，可配 config.json</span>
+        </button>
+        <button class="mode-btn disabled" disabled>
+          <span class="m-name">3D 逼真</span>
+          <span class="m-desc">VRM · 开发中</span>
+        </button>
+      </div>
+
       <input type="file" id="file" accept="image/*" multiple style="display: none" />
-      <div class="hint">支持 PNG / JPG，透明背景 PNG 最自然。可一次选多张 = 多只宠物。</div>
+      <input type="file" id="spriteFile" accept="image/*,.json" multiple style="display: none" />
+
+      <div class="section-title">宠物仓库</div>
+      <div id="petWarehouse"></div>
 
       <div class="section-title">提醒</div>
       <div id="reminderList"></div>

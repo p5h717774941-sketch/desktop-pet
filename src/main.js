@@ -1,8 +1,13 @@
 import { load } from "@tauri-apps/plugin-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { DEMO_SPRITE, SPRITE_PRESET } from "./sprite-demo.js";
 
 // ===== 状态 =====
+// 宠物档案对象：{ id, name, hobby, personality, src, mode, status, sprite?, ...运行时字段 }
+//   status: 'active'（已放出，桌面游走）| 'stored'（已收回，只待在仓库）
+//   mode: 'image'（单图，可用）| 'sprite'（2D 灵动帧动画，可用）| 'vrm'（3D，开发中）
+//   sprite: { src, frameW, frameH, actions:{ idle/walk/eat/happy: {row,count,fps,loop} } }
 let pets = [];
 let idc = 0;
 let store = null;
@@ -32,16 +37,26 @@ async function initStore() {
   }
 }
 
-function petsData() {
-  return pets.map((p) => ({ id: p.id, src: p.src, name: p.name }));
+// 只持久化档案字段，运行时字段（el/x/y/vx/vy/...）不落盘
+function petProfile(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    hobby: p.hobby || "",
+    personality: p.personality || "",
+    src: p.src,
+    mode: p.mode || "image",
+    status: p.status || "active",
+    sprite: p.sprite || null,
+  };
 }
 
 async function persist() {
-  const payload = { settings, pets: petsData() };
+  const payload = { settings, pets: pets.map(petProfile) };
   if (store) {
     try {
       await store.set("settings", settings);
-      await store.set("pets", petsData());
+      await store.set("pets", payload.pets);
       return;
     } catch (e) {
       console.warn(e);
@@ -52,6 +67,11 @@ async function persist() {
   } catch (e) {}
 }
 
+// 当前放出的宠物（有 DOM 元素在桌面游走的）
+function activePets() {
+  return pets.filter((p) => p.status === "active" && p.el);
+}
+
 // ===== 面板交互 =====
 function togglePanel() {
   document.getElementById("panel").classList.toggle("collapsed");
@@ -59,9 +79,14 @@ function togglePanel() {
 
 function applySettingsToUI() {
   renderReminders();
+  renderWarehouse();
 }
 
-// 渲染用户自定义提醒列表
+function escapeAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+// ===== 提醒列表（渲染） =====
 function renderReminders() {
   const list = document.getElementById("reminderList");
   if (!list) return;
@@ -103,63 +128,286 @@ function renderReminders() {
   }
 }
 
-function escapeAttr(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+// ===== 宠物仓库（渲染） =====
+function renderWarehouse() {
+  const box = document.getElementById("petWarehouse");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!pets.length) {
+    box.innerHTML = '<div class="hint" style="margin:2px 0 8px">仓库空空，上传一只宠物吧</div>';
+    return;
+  }
+  pets.forEach((p) => {
+    const active = p.status === "active";
+    const modeTag =
+      p.mode === "sprite" ? "2D" : p.mode === "vrm" ? "3D" : "图";
+    const card = document.createElement("div");
+    card.className = "pet-card" + (active ? " is-out" : "");
+    card.dataset.id = p.id;
+    card.innerHTML = `
+      <img class="p-thumb" src="${escapeAttr(p.src)}" alt="" />
+      <div class="p-info">
+        <input class="p-name" value="${escapeAttr(p.name || "")}" placeholder="名字" />
+        <input class="p-hobby" value="${escapeAttr(p.hobby || "")}" placeholder="爱好（可选）" />
+        <input class="p-personality" value="${escapeAttr(p.personality || "")}" placeholder="性格（可选）" />
+      </div>
+      <div class="p-actions">
+        <span class="p-status"><span class="p-mode">${modeTag}</span>${active ? " 已放出" : " 已收回"}</span>
+        <button class="p-toggle" title="${active ? "收回" : "放出"}">${active ? "收回" : "放出"}</button>
+        <button class="p-del" title="删除">✕</button>
+      </div>`;
+    box.appendChild(card);
+  });
 }
 
 // ===== 宠物 =====
-function spawnPet(src, name) {
-  const el = document.createElement("div");
-  el.className = "pet";
-  const size = 90 + Math.random() * 40;
-  el.innerHTML =
-    '<img class="body" src="' +
-    src +
-    '" style="width:' +
-    size +
-    'px;height:auto;border-radius:14px">';
-  document.getElementById("stage").appendChild(el);
+function spawnPet(profile, status) {
+  const st = status || profile.status || "active";
+  let pid;
+  if (profile.id != null) {
+    pid = profile.id;
+    if (pid > idc) idc = pid;
+  } else {
+    pid = ++idc;
+  }
   const p = {
-    id: ++idc,
-    el,
-    src,
-    name: name || "宠物" + idc,
+    id: pid,
+    name: profile.name || "宠物" + pid,
+    hobby: profile.hobby || "",
+    personality: profile.personality || "",
+    src: profile.src,
+    mode: profile.mode || "image",
+    sprite: profile.sprite || null,
+    status: st,
+    el: null,
     x: Math.random() * (innerWidth - 200) + 50,
     y: Math.random() * (innerHeight - 200) + 50,
     vx: (Math.random() - 0.5) * 1.2,
     vy: (Math.random() - 0.5) * 1.2,
-    size,
+    size: 90 + Math.random() * 40,
     state: "wander",
     rest: 0,
     clicks: [],
     timer: null,
+    // sprite 运行时字段
+    bodyEl: null,
+    anim: "idle",
+    animTime: 0,
+    lastTick: 0,
+    happyUntil: 0,
   };
+  pets.push(p);
+  if (st === "active") mountPet(p);
+  return p;
+}
+
+// 计算 sprite 网格的行列数（用于 background-size 缩放）
+function spriteGrid(sprite) {
+  if (!sprite || !sprite.actions) return { rows: 1, cols: 1 };
+  const acts = Object.values(sprite.actions);
+  const rows = Math.max(...acts.map((a) => (a.row || 0) + 1));
+  const cols = Math.max(...acts.map((a) => a.count || 1));
+  return { rows, cols };
+}
+
+// 给宠物创建 DOM 元素并挂到 stage
+function mountPet(p) {
+  const el = document.createElement("div");
+  el.className = "pet";
+  if (p.mode === "sprite" && p.sprite) {
+    const grid = spriteGrid(p.sprite);
+    const body = document.createElement("div");
+    body.className = "sprite-body";
+    body.style.width = p.size + "px";
+    body.style.height = p.size + "px";
+    body.style.backgroundImage = 'url("' + p.sprite.src + '")';
+    body.style.backgroundRepeat = "no-repeat";
+    body.style.backgroundSize = grid.cols * p.size + "px " + grid.rows * p.size + "px";
+    el.appendChild(body);
+    p.bodyEl = body;
+    p.sprite.grid = grid;
+    p.anim = "idle";
+    p.animTime = 0;
+    p.lastTick = performance.now();
+  } else {
+    el.innerHTML =
+      '<img class="body" src="' +
+      p.src +
+      '" style="width:' +
+      p.size +
+      'px;height:auto;border-radius:14px">';
+  }
+  document.getElementById("stage").appendChild(el);
   el.style.left = p.x + "px";
   el.style.top = p.y + "px";
   el.addEventListener("click", () => onClick(p));
-  pets.push(p);
-  return p;
+  p.el = el;
+  p.status = "active";
+}
+
+// 收回：从桌面移除 DOM，宠物留在仓库
+function storePet(id) {
+  const p = pets.find((x) => x.id === id);
+  if (!p || p.status !== "active") return;
+  if (p.el) {
+    p.el.remove();
+    p.el = null;
+    p.bodyEl = null;
+  }
+  p.status = "stored";
+  persist();
+  renderWarehouse();
+  updateEmpty();
+}
+
+// 放出：从仓库重新挂到桌面
+function releasePet(id) {
+  const p = pets.find((x) => x.id === id);
+  if (!p || p.status !== "stored") return;
+  mountPet(p);
+  persist();
+  renderWarehouse();
+  updateEmpty();
+}
+
+// 删除：彻底移除（两段式确认，在事件层处理）
+function deletePet(id) {
+  const p = pets.find((x) => x.id === id);
+  if (!p) return;
+  if (p.el) p.el.remove();
+  pets = pets.filter((x) => x.id !== id);
+  persist();
+  renderWarehouse();
+  updateEmpty();
+}
+
+let emptyTimer = null;
+function updateEmpty() {
+  const empty = document.getElementById("empty");
+  const act = activePets();
+  if (act.length) {
+    clearTimeout(emptyTimer);
+    empty.style.display = "none";
+    return;
+  }
+  if (pets.length === 0) {
+    empty.querySelector(".big").textContent = "🐾";
+    empty.querySelector(".txt").textContent = "点左上角「上传宠物」添加第一只";
+    empty.style.display = "flex";
+    return;
+  }
+  empty.querySelector(".big").textContent = "🏠";
+  empty.querySelector(".txt").textContent = "宠物都收回仓库啦，去面板放出来吧";
+  empty.style.display = "flex";
+  clearTimeout(emptyTimer);
+  emptyTimer = setTimeout(() => {
+    empty.style.display = "none";
+  }, 3000);
 }
 
 function addPets(input) {
   const files = input.files;
   if (!files.length) return;
-  document.getElementById("empty").style.display = "none";
   [...files].forEach((f) => {
     const r = new FileReader();
     r.onload = (e) => {
-      spawnPet(e.target.result, f.name.replace(/\.[^.]+$/, ""));
+      spawnPet({ name: f.name.replace(/\.[^.]+$/, ""), src: e.target.result, mode: "image" });
       persist();
+      renderWarehouse();
+      updateEmpty();
     };
     r.readAsDataURL(f);
   });
   input.value = "";
+  document.getElementById("modePicker").style.display = "none";
+}
+
+// 2D 精灵：示例（内置）或自定义上传
+function spawnSpritePet(profile) {
+  spawnPet({
+    name: profile.name,
+    src: profile.sprite.src,
+    mode: "sprite",
+    sprite: profile.sprite,
+  });
+  persist();
+  renderWarehouse();
+  updateEmpty();
+}
+
+// 规范化用户自定义 config.json → 内部 sprite 配置 {src, frameW, frameH, actions}
+// 约定：actions 的 key 建议用 idle/walk/eat/happy（引擎自动触发的四种），其余 key 先存着等状态机扩充
+function normalizeSpriteConfig(cfg, src) {
+  const frameW = cfg && Number(cfg.frameW) > 0 ? Number(cfg.frameW) : SPRITE_PRESET.frameW;
+  const frameH = cfg && Number(cfg.frameH) > 0 ? Number(cfg.frameH) : SPRITE_PRESET.frameH;
+  const actions = {};
+  if (cfg && cfg.actions && typeof cfg.actions === "object") {
+    Object.entries(cfg.actions).forEach(([k, v]) => {
+      if (!v || typeof v !== "object") return;
+      const row = Number(v.row);
+      const count = Number(v.count);
+      if (Number.isNaN(row) || Number.isNaN(count) || count < 1) return;
+      actions[k] = {
+        row,
+        count,
+        fps: Number(v.fps) > 0 ? Number(v.fps) : 8,
+        loop: v.loop !== false,
+      };
+    });
+  }
+  if (!Object.keys(actions).length) {
+    // 无有效 config → 用默认预设（4 动作 × 4 帧）
+    return { src, frameW, frameH, actions: JSON.parse(JSON.stringify(SPRITE_PRESET.actions)) };
+  }
+  if (!actions.idle) actions.idle = Object.assign({}, SPRITE_PRESET.actions.idle);
+  return { src, frameW, frameH, actions };
+}
+
+// 2D 自定义：一次可选传 sprite sheet 图 + config.json（图按 image 分类，.json 当配置）
+function addSpritePets(input) {
+  const files = [...input.files];
+  if (!files.length) return;
+  const imgs = files.filter((f) => f.type && f.type.startsWith("image/"));
+  if (!imgs.length) return;
+  const cfgFile = files.find(
+    (f) => f.name.toLowerCase().endsWith(".json") || f.type === "application/json"
+  );
+
+  const readConfig = cfgFile
+    ? new Promise((res) => {
+        const r = new FileReader();
+        r.onload = (e) => {
+          try {
+            res(JSON.parse(e.target.result));
+          } catch (err) {
+            res(null);
+          }
+        };
+        r.onerror = () => res(null);
+        r.readAsText(cfgFile);
+      })
+    : Promise.resolve(null);
+
+  readConfig.then((cfg) => {
+    imgs.forEach((f) => {
+      const r = new FileReader();
+      r.onload = (e) => {
+        const sprite = normalizeSpriteConfig(cfg, e.target.result);
+        spawnSpritePet({ name: f.name.replace(/\.[^.]+$/, ""), sprite });
+      };
+      r.readAsDataURL(f);
+    });
+  });
+
+  input.value = "";
+  document.getElementById("modePicker").style.display = "none";
 }
 
 // ===== 点击互动 =====
 function onClick(p) {
   const now = Date.now();
   pokeInteract();
+  if (p.sprite) p.happyUntil = Date.now() + 1300; // sprite 宠物点一下播 happy 动作
   p.clicks = p.clicks.filter((t) => now - t < 800);
   p.clicks.push(now);
   const n = p.clicks.length;
@@ -234,12 +482,58 @@ function bubble(p, txt, alert) {
   setTimeout(() => b.remove(), alert ? 3200 : 1800);
 }
 
+// ===== sprite 帧动画：状态机 + 切帧 =====
+// 根据宠物当前状态决定播放哪个动作
+function spriteAnimFor(p) {
+  const s = p.sprite;
+  if (!s) return "idle";
+  if (p.happyUntil && Date.now() < p.happyUntil) return "happy";
+  if (p.state === "alert") return "happy";
+  if (p.rest > 0) return "idle";
+  if (Math.abs(p.vx) > 0.05 || Math.abs(p.vy) > 0.05) return "walk";
+  return "idle";
+}
+
+// 每帧推进动画时钟，按 fps 切 background-position
+function tickSprite(p, now) {
+  const s = p.sprite;
+  if (!s || !p.bodyEl) return;
+  const want = spriteAnimFor(p);
+  if (p.anim !== want) {
+    p.anim = want;
+    p.animTime = 0;
+  }
+  const act = s.actions[want] || s.actions.idle;
+  if (!act) return;
+  const dt = now - (p.lastTick || now);
+  p.lastTick = now;
+  p.animTime += dt;
+  const frameDur = 1000 / (act.fps || 8);
+  let idx = Math.floor(p.animTime / frameDur);
+  if (idx >= act.count) {
+    if (act.loop !== false) {
+      p.animTime = 0;
+      idx = 0;
+    } else {
+      idx = act.count - 1;
+    }
+  }
+  const x = -(idx * p.size);
+  const y = -((act.row || 0) * p.size);
+  p.bodyEl.style.backgroundPosition = x + "px " + y + "px";
+}
+
 // ===== 游走 loop =====
 function loop() {
-  pets.forEach((p) => {
-    if (p.state === "alert") return;
+  const now = performance.now();
+  activePets().forEach((p) => {
+    if (p.state === "alert") {
+      if (p.sprite) tickSprite(p, now);
+      return;
+    }
     if (p.rest > 0) {
       p.rest--;
+      if (p.sprite) tickSprite(p, now);
       return;
     }
     p.x += p.vx;
@@ -268,6 +562,7 @@ function loop() {
       p.rest = Math.floor(60 + Math.random() * 180);
     p.el.style.left = p.x + "px";
     p.el.style.top = p.y + "px";
+    if (p.sprite) tickSprite(p, now);
   });
   requestAnimationFrame(loop);
 }
@@ -279,7 +574,7 @@ function reportHotspots() {
   if (now - lastReport < 120) return;
   lastReport = now;
   const hs = [];
-  pets.forEach((p) => {
+  activePets().forEach((p) => {
     const r = p.el.getBoundingClientRect();
     if (r.width && r.height)
       hs.push({ x: r.left - 10, y: r.top - 10, w: r.width + 20, h: r.height + 20 });
@@ -313,7 +608,6 @@ function checkAlerts() {
   settings.reminders.forEach((r) => {
     if (r.enabled === false) return;
     if (r.type === "interval") {
-      // 每 N 分钟提醒：基于上次触发时间戳循环
       const gap = (parseInt(r.interval) || 1) * 60000;
       if (nowTs - (r.lastFired || 0) >= gap) {
         r.lastFired = nowTs;
@@ -322,7 +616,6 @@ function checkAlerts() {
       }
       return;
     }
-    // 时间节点提醒
     if (r.repeat === "weekday" && !isWeekday) return;
     if (r.time === t && !alertsDone[r.id + dayKey + t]) {
       alertsDone[r.id + dayKey + t] = 1;
@@ -332,8 +625,9 @@ function checkAlerts() {
 }
 
 function fireAlert(msg, kind) {
-  if (!pets.length) return;
-  const p = pets[0];
+  const act = activePets();
+  if (!act.length) return;
+  const p = act[0];
   p.state = "alert";
   p.el.classList.add("alert");
   const tx = innerWidth / 2 - p.size / 2;
@@ -353,7 +647,6 @@ function fireAlert(msg, kind) {
 
 // ===== 启动 =====
 async function init() {
-  // OS 级忽略鼠标事件：让透明窗下面的桌面图标/其他窗口可被点击（真穿透）
   try {
     await getCurrentWindow().setIgnoreCursorEvents(true);
   } catch (e) {
@@ -362,7 +655,6 @@ async function init() {
   await initStore();
   applySettingsToUI();
 
-  // 恢复宠物
   let saved = null;
   if (store) {
     try {
@@ -375,19 +667,71 @@ async function init() {
     } catch (e) {}
   }
   if (saved && saved.length) {
-    document.getElementById("empty").style.display = "none";
-    saved.forEach((p) => spawnPet(p.src, p.name));
+    saved.forEach((p) => spawnPet(p, p.status));
   }
+  renderWarehouse();
+  updateEmpty();
 
-  // 事件绑定
-  document.getElementById("uploadBtn").addEventListener("click", () =>
-    document.getElementById("file").click()
-  );
+  // 上传：先展开模式选择
+  document.getElementById("uploadBtn").addEventListener("click", () => {
+    const mp = document.getElementById("modePicker");
+    mp.style.display = mp.style.display === "none" ? "flex" : "none";
+  });
+  // 单图模式
+  document.getElementById("modeImage").addEventListener("click", () => {
+    document.getElementById("file").click();
+  });
+  // 2D 灵动：示例精灵（内置）
+  document.getElementById("modeSpriteDemo").addEventListener("click", () => {
+    spawnSpritePet({ name: "示例精灵", sprite: DEMO_SPRITE });
+    document.getElementById("modePicker").style.display = "none";
+  });
+  // 2D 灵动：自定义上传 sprite sheet
+  document.getElementById("modeSpriteUpload").addEventListener("click", () => {
+    document.getElementById("spriteFile").click();
+  });
+
   document.getElementById("collapseBtn").addEventListener("click", togglePanel);
   document.getElementById("toggleBtn").addEventListener("click", togglePanel);
-  document.getElementById("file").addEventListener("change", (e) =>
-    addPets(e.target)
-  );
+  document.getElementById("file").addEventListener("change", (e) => addPets(e.target));
+  document.getElementById("spriteFile").addEventListener("change", (e) => addSpritePets(e.target));
+
+  // 仓库：事件委托
+  const wh = document.getElementById("petWarehouse");
+  wh.addEventListener("input", (e) => {
+    const card = e.target.closest(".pet-card");
+    if (!card) return;
+    const p = pets.find((x) => x.id == card.dataset.id);
+    if (!p) return;
+    if (e.target.classList.contains("p-name")) p.name = e.target.value;
+    else if (e.target.classList.contains("p-hobby")) p.hobby = e.target.value;
+    else if (e.target.classList.contains("p-personality"))
+      p.personality = e.target.value;
+    persist();
+  });
+  wh.addEventListener("click", (e) => {
+    const card = e.target.closest(".pet-card");
+    if (!card) return;
+    const p = pets.find((x) => x.id == card.dataset.id);
+    if (!p) return;
+    if (e.target.classList.contains("p-toggle")) {
+      if (p.status === "active") storePet(p.id);
+      else releasePet(p.id);
+    } else if (e.target.classList.contains("p-del")) {
+      if (card.classList.contains("confirming")) {
+        deletePet(p.id);
+      } else {
+        card.classList.add("confirming");
+        e.target.textContent = "确认?";
+        setTimeout(() => {
+          if (card.isConnected) {
+            card.classList.remove("confirming");
+            e.target.textContent = "✕";
+          }
+        }, 2000);
+      }
+    }
+  });
 
   // 新增提醒
   document.getElementById("addReminder").addEventListener("click", () => {
@@ -405,7 +749,7 @@ async function init() {
     persist();
   });
 
-  // 提醒列表：事件委托（动态项）
+  // 提醒列表：事件委托
   const list = document.getElementById("reminderList");
   const onListChange = (e) => {
     const row = e.target.closest(".reminder");
@@ -441,12 +785,12 @@ async function init() {
   });
 
   loop();
-  // 彩蛋3.2：超过5分钟没理宠物，主动冒泡（每30秒检测一次）
   setInterval(() => {
-    if (pets.length && Date.now() - lastInteract > 5 * 60000) {
-      const p = pets[Math.floor(Math.random() * pets.length)];
+    const act = activePets();
+    if (act.length && Date.now() - lastInteract > 5 * 60000) {
+      const p = act[Math.floor(Math.random() * act.length)];
       bubble(p, EGG.neglect, false);
-      lastInteract = Date.now(); // 重置，避免一直弹
+      lastInteract = Date.now();
     }
   }, 30000);
   setInterval(reportHotspots, 120);
