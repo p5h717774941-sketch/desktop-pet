@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Pinkmo",
-  "version": "1.9.2",
+  "version": "1.10.0",
   "identifier": "cc.pinkmo.pet",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -16,6 +16,22 @@
       {
         "label": "main",
         "title": "Pinkmo",
+        "width": 1060,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 560,
+        "transparent": false,
+        "decorations": true,
+        "visible": true,
+        "shadow": true,
+        "alwaysOnTop": false,
+        "resizable": true,
+        "fullscreen": false
+      },
+      {
+        "label": "pet",
+        "title": "Pinkmo Pet",
+        "url": "pet.html",
         "width": 400,
         "height": 400,
         "transparent": true,

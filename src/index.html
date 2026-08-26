@@ -7,54 +7,13 @@
     <link rel="stylesheet" href="styles.css" />
     <script type="module" src="/main.js"></script>
   </head>
-  <body>
-    <div id="stage">
-      <div id="empty">
-        <div class="big">🐾</div>
-        <div class="txt">点左上角「上传宠物」添加第一只</div>
-      </div>
-    </div>
-
-    <div id="panel">
-      <h1><span class="dot"></span>Pinkmo <small>v1.9.2</small></h1>
-      <div class="row">
-        <button class="primary" id="uploadBtn">+ 上传宠物</button>
-        <button id="collapseBtn">收起</button>
-      </div>
-
-      <div id="modePicker" class="mode-picker" style="display: none">
-        <button class="mode-btn" id="modeImage">
-          <span class="m-name">单图模式</span>
-          <span class="m-desc">上传照片直接用</span>
-        </button>
-        <button class="mode-btn" id="modeSpriteDemo">
-          <span class="m-name">2D 灵动 · 示例</span>
-          <span class="m-desc">内置小精灵，先试效果</span>
-        </button>
-        <button class="mode-btn" id="modeSpriteUpload">
-          <span class="m-name">2D 灵动 · 自定义</span>
-          <span class="m-desc">传帧图，可配 config.json</span>
-        </button>
-        <button class="mode-btn disabled" disabled>
-          <span class="m-name">3D 逼真</span>
-          <span class="m-desc">VRM · 开发中</span>
-        </button>
-      </div>
-
-      <input type="file" id="file" accept="image/*" multiple style="display: none" />
-      <input type="file" id="spriteFile" accept="image/*,.json" multiple style="display: none" />
-
-      <div class="section-title">宠物仓库</div>
-      <div id="petWarehouse"></div>
-
-      <div class="section-title">提醒</div>
-      <div id="reminderList"></div>
-      <button id="addReminder" class="add-btn">+ 新增提醒</button>
-      <div class="hint">提醒时宠物会跳到屏幕中央喊你。时间 / 话语 / 重复频率都由你定。</div>
-      <div class="hint brand">🐭 黑鼠制作</div>
-    </div>
-
-    <button id="toggleBtn">🐾</button>
-    <div id="brand">🐭 黑鼠制作</div>
-  </body>
+  <body class="control-window"><div class="app-shell">
+    <aside class="sidebar"><div class="brand-lockup"><div class="brand-mark">🐾</div><div><strong>Pinkmo</strong><small>桌面宠物小屋</small></div></div><div class="nav-label">宠物小屋</div><nav class="side-nav"><button class="nav-item active" data-view="upload"><span>＋</span>上传宠物</button><button class="nav-item" data-view="warehouse"><span>⌂</span>宠物仓库</button><button class="nav-item" data-view="actions"><span>✦</span>动作管理</button><button class="nav-item" data-view="reminders"><span>◷</span>提醒事项</button><button class="nav-item" data-view="settings"><span>⚙</span>设置</button></nav><div class="sidebar-foot"><span class="live-dot"></span><span id="petCount">桌面宠物准备中</span><small>🐭 黑鼠制作 · v1.10</small></div></aside>
+    <main class="main-content"><header class="topbar"><div><h1 id="viewTitle">上传宠物</h1><p id="viewSub">把喜欢的伙伴带到桌面上吧</p></div><div class="window-note">宠物正在桌面右下角活动</div></header><div class="content">
+      <section class="view active" data-view="upload"><div class="hero-card"><div><span class="eyebrow">WELCOME HOME</span><h2>今天想认识哪位新朋友？</h2><p>上传一张图片，或先试试内置的粉色史莱姆精灵。</p></div><div class="hero-paw">🐾</div></div><div class="upload-grid"><button class="upload-option" id="modeImage"><span>🖼️</span><strong>上传单张图片</strong><small>照片、插画都可以直接变成桌面宠物</small></button><button class="upload-option" id="modeSpriteDemo"><span>🩷</span><strong>试试示例精灵</strong><small>粉色史莱姆，带有丰富的待机和互动动作</small></button><button class="upload-option" id="modeSpriteUpload"><span>✦</span><strong>上传 2D 宠物</strong><small>选择 sprite sheet，可同时附上 config.json</small></button><button class="upload-option disabled" disabled><span>◇</span><strong>上传 3D 宠物</strong><small>3D 模型宠物正在开发中</small><em>开发中</em></button></div><input type="file" id="file" accept="image/*" multiple hidden /><input type="file" id="spriteFile" accept="image/*,.json" multiple hidden /></section>
+      <section class="view" data-view="warehouse"><div class="section-head"><div><h2>宠物仓库</h2><p>管理已收养的小伙伴，决定谁今天出来陪你。</p></div><button class="btn primary" data-go="upload">＋ 添加宠物</button></div><div id="petWarehouse" class="warehouse-grid"></div><input type="file" id="coverFile" accept="image/*" hidden /></section>
+      <section class="view" data-view="actions"><div class="section-head"><div><h2>动作管理</h2><p>查看 2D 精灵当前可用的动作配置。</p></div></div><div id="actionManager" class="action-grid"></div></section>
+      <section class="view" data-view="reminders"><div class="section-head"><div><h2>提醒事项</h2><p>到时间时，桌面上的宠物会跑来叫你。</p></div></div><div class="card"><div id="reminderList"></div><button id="addReminder" class="add-btn">＋ 新增提醒</button></div></section>
+      <section class="view" data-view="settings"><div class="section-head"><div><h2>设置</h2><p>把 Pinkmo 调成最舒服的陪伴节奏。</p></div></div><div class="card settings-card"><div class="setting-row"><span><strong>闲置靠近</strong><small>鼠标静止时，宠物会来找你互动</small></span><button id="attentionEnabled" class="pink-toggle on" type="button" role="switch" aria-checked="true"><i></i></button></div><label class="setting-row" for="attentionMinutes"><span><strong>主动求关注</strong><small>多久没有互动后，宠物会追随鼠标</small></span><span class="number-control"><input id="attentionMinutes" type="number" min="1" max="240" step="1" /> 分钟</span></label><label class="setting-row" for="speechStyle"><span><strong>宠物说话风格</strong><small>会影响日常互动时的气泡内容和出现频率</small></span><select id="speechStyle"><option value="default">默认 · 温柔陪伴</option><option value="chatty">话唠 · 活泼可爱</option><option value="quiet">安静 · 偶尔回应</option></select></label><label class="setting-row" for="petSize"><span><strong>宠物大小</strong><small>调整桌面上所有宠物的显示尺寸</small></span><span class="number-control"><input id="petSize" type="range" min="70" max="180" step="5" /><b id="petSizeValue"></b></span></label></div></section>
+    </div></main></div></body>
 </html>

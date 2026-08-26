@@ -1,6 +1,7 @@
 import { load } from "@tauri-apps/plugin-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { emit, listen } from "@tauri-apps/api/event";
 import { DEMO_SPRITE, SPRITE_PRESET } from "./sprite-demo.js";
 
 // ===== 状态 =====
@@ -11,12 +12,22 @@ import { DEMO_SPRITE, SPRITE_PRESET } from "./sprite-demo.js";
 let pets = [];
 let idc = 0;
 let store = null;
+let coverTargetId = null;
 const alertsDone = {};
+const PATROL_MARGIN = 36;
+const PATROL_WIDTH = 320;
+const PATROL_HEIGHT = 220;
+let mousePosition = { x: innerWidth - 120, y: innerHeight - 120 };
+const IS_PANEL = getCurrentWindow().label === "main";
 
 // 提醒全部由用户自定义：默认空列表
 // 每项：{ id, label, type:'time'|'interval', time:"HH:MM", interval:分钟, message, repeat:'daily'|'weekday', enabled, lastFired }
 const settings = {
   reminders: [],
+  attentionMinutes: 20,
+  attentionEnabled: true,
+  speechStyle: "default",
+  petSize: 120,
 };
 
 // ===== 持久化 =====
@@ -48,6 +59,7 @@ function petProfile(p) {
     mode: p.mode || "image",
     status: p.status || "active",
     sprite: p.sprite || null,
+    cover: p.cover || p.src,
   };
 }
 
@@ -57,6 +69,7 @@ async function persist() {
     try {
       await store.set("settings", settings);
       await store.set("pets", payload.pets);
+      await emit("store-changed", payload);
       return;
     } catch (e) {
       console.warn(e);
@@ -64,6 +77,7 @@ async function persist() {
   }
   try {
     localStorage.setItem("pet-backup", JSON.stringify(payload));
+    await emit("store-changed", payload);
   } catch (e) {}
 }
 
@@ -72,18 +86,102 @@ function activePets() {
   return pets.filter((p) => p.status === "active" && p.el);
 }
 
+function patrolBounds(size) {
+  return {
+    minX: Math.max(10, innerWidth - size - PATROL_WIDTH),
+    maxX: Math.max(10, innerWidth - size - PATROL_MARGIN),
+    minY: Math.max(10, innerHeight - size - PATROL_HEIGHT),
+    maxY: Math.max(10, innerHeight - size - PATROL_MARGIN),
+  };
+}
+
+function randomPatrolPosition(size) {
+  const b = patrolBounds(size);
+  return {
+    x: b.minX + Math.random() * Math.max(1, b.maxX - b.minX),
+    y: b.minY + Math.random() * Math.max(1, b.maxY - b.minY),
+  };
+}
+
 // ===== 面板交互 =====
 function togglePanel() {
   document.getElementById("panel").classList.toggle("collapsed");
 }
 
 function applySettingsToUI() {
+  if (!IS_PANEL) return;
   renderReminders();
   renderWarehouse();
+  renderActionManager();
+  const count = document.getElementById("petCount");
+  if (count) count.textContent = pets.length ? `${pets.filter((p) => p.status === "active").length} 位宠物正在桌面` : "还没有领养宠物";
+  const attentionInput = document.getElementById("attentionMinutes");
+  if (attentionInput) attentionInput.value = settings.attentionMinutes;
+  const attentionToggle = document.getElementById("attentionEnabled");
+  if (attentionToggle) {
+    const on = settings.attentionEnabled !== false;
+    attentionToggle.classList.toggle("on", on);
+    attentionToggle.setAttribute("aria-checked", String(on));
+  }
+  const speechStyle = document.getElementById("speechStyle");
+  if (speechStyle) speechStyle.value = settings.speechStyle || "default";
+  const petSize = document.getElementById("petSize");
+  if (petSize) petSize.value = normalizedPetSize();
+  const petSizeValue = document.getElementById("petSizeValue");
+  if (petSizeValue) petSizeValue.textContent = normalizedPetSize() + " px";
+}
+
+function renderActionManager() {
+  const box = document.getElementById("actionManager");
+  if (!box) return;
+  const spritePets = pets.filter((p) => p.mode === "sprite" && p.sprite?.actions);
+  if (!spritePets.length) {
+    box.innerHTML = '<div class="empty-card">还没有 2D 精灵。添加“示例精灵”后，就能在这里看到它的动作。</div>';
+    return;
+  }
+  box.innerHTML = spritePets.flatMap((p) => Object.entries(p.sprite.actions).map(([name, a]) =>
+    `<div class="action-card"><strong>${escapeAttr(p.name)} · ${escapeAttr(name)}</strong><small>第 ${Number(a.row) + 1} 行 · ${a.count} 帧 · ${a.fps || 8} fps</small></div>`
+  )).join("");
+}
+
+function attentionDelayMs() {
+  const minutes = Math.max(1, Math.min(240, Number(settings.attentionMinutes) || 20));
+  return minutes * 60 * 1000;
+}
+
+function normalizedPetSize() {
+  return Math.max(70, Math.min(180, Number(settings.petSize) || 120));
+}
+
+function resizePet(p, size = normalizedPetSize()) {
+  p.size = size;
+  if (!p.el) return;
+  if (p.bodyEl && p.sprite) {
+    const grid = p.sprite.grid || spriteGrid(p.sprite);
+    p.bodyEl.style.width = size + "px";
+    p.bodyEl.style.height = size + "px";
+    p.bodyEl.style.backgroundSize = grid.cols * size + "px " + grid.rows * size + "px";
+  } else {
+    const image = p.el.querySelector(".body");
+    if (image) image.style.width = size + "px";
+  }
+  p.x = Math.max(0, Math.min(innerWidth - size, p.x));
+  p.y = Math.max(0, Math.min(innerHeight - size, p.y));
+  p.el.style.left = p.x + "px";
+  p.el.style.top = p.y + "px";
 }
 
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+function todayKey() {
+  return new Date().toDateString();
+}
+
+function reminderCompleted(r) {
+  if (r.type === "interval") return Boolean(r.completedAt && r.completedAt >= (r.lastFired || 0));
+  return r.completedDay === todayKey();
 }
 
 // ===== 提醒列表（渲染） =====
@@ -96,9 +194,11 @@ function renderReminders() {
     row.className = "reminder";
     row.dataset.id = r.id;
     const isInterval = r.type === "interval";
+    const completed = reminderCompleted(r);
     row.innerHTML = `
       <div class="r-top">
         <input class="r-label" value="${escapeAttr(r.label || "")}" placeholder="提醒事项" />
+        <button class="r-complete${completed ? " done" : ""}" title="${completed ? "已完成" : "标记完成"}">${completed ? "✓ 已完成" : "完成"}</button>
         <button class="r-del" title="删除">✕</button>
       </div>
       <div class="r-bottom">
@@ -145,15 +245,16 @@ function renderWarehouse() {
     card.className = "pet-card" + (active ? " is-out" : "");
     card.dataset.id = p.id;
     card.innerHTML = `
-      <img class="p-thumb" src="${escapeAttr(p.src)}" alt="" />
+      <div class="pet-cover"><img class="p-thumb" src="${escapeAttr(p.cover || p.src)}" alt="" /></div>
       <div class="p-info">
-        <input class="p-name" value="${escapeAttr(p.name || "")}" placeholder="名字" />
+        <div class="pet-name-line"><input class="p-name" value="${escapeAttr(p.name || "")}" placeholder="名字" /><span class="p-live">${active ? "桌面游走" : "已收回"}</span></div>
         <input class="p-hobby" value="${escapeAttr(p.hobby || "")}" placeholder="爱好（可选）" />
         <input class="p-personality" value="${escapeAttr(p.personality || "")}" placeholder="性格（可选）" />
       </div>
       <div class="p-actions">
-        <span class="p-status"><span class="p-mode">${modeTag}</span>${active ? " 已放出" : " 已收回"}</span>
+        <span class="p-status"><span class="p-mode">${modeTag}</span>${active ? " 正在陪伴" : " 在仓库休息"}</span>
         <button class="p-toggle" title="${active ? "收回" : "放出"}">${active ? "收回" : "放出"}</button>
+        <button class="p-cover" title="更换封面">封面</button>
         <button class="p-del" title="删除">✕</button>
       </div>`;
     box.appendChild(card);
@@ -170,6 +271,8 @@ function spawnPet(profile, status) {
   } else {
     pid = ++idc;
   }
+  const size = normalizedPetSize();
+  const start = randomPatrolPosition(size);
   const p = {
     id: pid,
     name: profile.name || "宠物" + pid,
@@ -178,13 +281,14 @@ function spawnPet(profile, status) {
     src: profile.src,
     mode: profile.mode || "image",
     sprite: profile.sprite || null,
+    cover: profile.cover || profile.sprite?.cover || profile.src,
     status: st,
     el: null,
-    x: Math.random() * (innerWidth - 200) + 50,
-    y: Math.random() * (innerHeight - 200) + 50,
+    x: start.x,
+    y: start.y,
     vx: (Math.random() - 0.5) * 1.2,
     vy: (Math.random() - 0.5) * 1.2,
-    size: 90 + Math.random() * 40,
+    size,
     state: "wander",
     rest: 0,
     clicks: [],
@@ -194,10 +298,26 @@ function spawnPet(profile, status) {
     anim: "idle",
     animTime: 0,
     lastTick: 0,
-    happyUntil: 0,
+    transientAnim: null,
+    transientUntil: 0,
+    idleAnim: "idle",
+    dragging: false,
+    dragMoved: false,
+    dragOffsetX: 0,
+    dragOffsetY: 0,
+    dragRestUntil: 0,
+    stateBeforeDrag: "wander",
+    suppressClickUntil: 0,
+    attentionMode: false,
+    nextRoutineAt: Date.now() + 9000 + Math.random() * 12000,
+    routineUntil: 0,
+    mood: "悠闲",
+    moodUntil: 0,
+    statusCard: null,
+    statusTimer: null,
   };
   pets.push(p);
-  if (st === "active") mountPet(p);
+  if (st === "active" && !IS_PANEL) mountPet(p);
   return p;
 }
 
@@ -212,6 +332,7 @@ function spriteGrid(sprite) {
 
 // 给宠物创建 DOM 元素并挂到 stage
 function mountPet(p) {
+  if (IS_PANEL || !document.getElementById("stage")) return;
   const el = document.createElement("div");
   el.className = "pet";
   if (p.mode === "sprite" && p.sprite) {
@@ -240,9 +361,151 @@ function mountPet(p) {
   document.getElementById("stage").appendChild(el);
   el.style.left = p.x + "px";
   el.style.top = p.y + "px";
-  el.addEventListener("click", () => onClick(p));
   p.el = el;
+  el.addEventListener("click", () => onClick(p));
+  el.addEventListener("pointerenter", () => {
+    clearTimeout(p.statusTimer);
+    p.statusTimer = setTimeout(() => showStatusCard(p), 450);
+  });
+  el.addEventListener("pointerleave", () => {
+    clearTimeout(p.statusTimer);
+    hideStatusCard(p);
+  });
+  installPetDrag(p);
   p.status = "active";
+}
+
+const BUBBLE_PACKS = {
+  default: { drag: ["你要带我去哪里呀？", "轻点，我自己会走~", "慢一点嘛~"], single: ["在呢~", "想我啦？", "戳我干啥", "哼"], double: ["嘿嘿", "喜欢我呀", "转个圈~"], multi: ["好开心！", "你也好可爱", "转晕啦~"], attention: ["理理我嘛~"], return: ["好嘛，我回去等你~"] },
+  chatty: { drag: ["哇，出发咯！", "这边的风景也要看看~", "慢慢走，我想多待一会！"], single: ["我在我在！", "欸？叫我吗？", "今天也想和你玩~", "再摸一下也可以呀！"], double: ["嘿嘿，被发现啦！", "好耶好耶！", "要不要一起转圈？"], multi: ["太开心啦！！", "你最好了！", "再陪我一会嘛~"], attention: ["我有好多话想说！", "理理我嘛~", "我在这儿等你呀！"], return: ["好吧，我先回小角落啦~"] },
+  quiet: { drag: ["……慢一点。", "嗯，知道了。"], single: ["嗯。", "我在。", "听见了。"], double: ["……好。", "别转太快。"], multi: ["有点晕。", "还行。"], attention: ["……看我一眼。"], return: ["嗯，我回去了。"] },
+  lively: { drag: ["出发！", "带我去玩！"], single: ["嘿！", "我在！"], double: ["转圈圈！"], multi: ["太好玩啦！"], attention: ["理理我嘛~"], return: ["我回去等你！"] },
+  cool: { drag: ["别摔着。", "随你。"], single: ["嗯？", "有事？"], double: ["知道了。"], multi: ["……够了。"], attention: ["……"], return: ["回去了。"] },
+};
+
+function bubblePack(p) {
+  const personality = String(p.personality || "").trim();
+  if (personality.includes("活泼")) return BUBBLE_PACKS.lively;
+  if (personality.includes("高冷")) return BUBBLE_PACKS.cool;
+  return BUBBLE_PACKS[settings.speechStyle] || BUBBLE_PACKS.default;
+}
+
+const ROUTINE_TALK = {
+  eat: ["补充一点小能量~", "嗯，这口刚刚好。"],
+  working: ["我也认真一会儿。", "专注陪伴中……"],
+  review: ["让我想想看。", "发一小会儿呆。"],
+  idle: ["今天天气不错。", "安静待在你身边。"],
+};
+
+function scheduleNextRoutine(p) {
+  p.nextRoutineAt = Date.now() + 25000 + Math.random() * 40000;
+}
+
+function startRoutine(p) {
+  if (p.dragging || p.attentionMode || p.state !== "wander" || p.rest > 0) return;
+  const choices = ["eat", "working", "review", "idle"].filter((name) => hasPetAnim(p, name));
+  if (!choices.length) { scheduleNextRoutine(p); return; }
+  const action = pick(choices);
+  p.idleAnim = action;
+  p.rest = Math.floor(180 + Math.random() * 240);
+  p.routineUntil = Date.now() + (p.rest / 60) * 1000;
+  setMood(p, action === "eat" ? "正在吃点心" : action === "working" ? "认真陪伴中" : "悠闲发呆中", (p.rest / 60) * 1000);
+  bubble(p, pick(ROUTINE_TALK[action]), false);
+  scheduleNextRoutine(p);
+}
+
+function moodFor(p) {
+  if (p.moodUntil && Date.now() < p.moodUntil) return p.mood;
+  if (p.attentionMode) return "有点无聊";
+  if (p.state === "alert") return "在提醒你";
+  return "悠闲散步中";
+}
+
+function setMood(p, mood, duration = 4000) {
+  p.mood = mood;
+  p.moodUntil = Date.now() + duration;
+  if (p.statusCard) updateStatusCard(p);
+}
+
+function updateStatusCard(p) {
+  if (!p.statusCard) return;
+  const personality = String(p.personality || "").trim() || ({ chatty: "话唠", quiet: "安静", default: "温柔" }[settings.speechStyle] || "温柔");
+  p.statusCard.querySelector("strong").textContent = p.name;
+  p.statusCard.querySelector(".status-personality").textContent = personality;
+  p.statusCard.querySelector(".status-mood").textContent = moodFor(p);
+  const r = p.el.getBoundingClientRect();
+  p.statusCard.style.left = Math.max(8, Math.min(innerWidth - 190, r.left + r.width / 2 - 95)) + "px";
+  p.statusCard.style.top = Math.max(8, r.top - 64) + "px";
+}
+
+function showStatusCard(p) {
+  if (!p.el || p.dragging) return;
+  if (!p.statusCard) {
+    const card = document.createElement("div");
+    card.className = "pet-status-card";
+    card.innerHTML = '<strong></strong><span class="status-personality"></span><small class="status-mood"></small>';
+    document.body.appendChild(card);
+    p.statusCard = card;
+  }
+  updateStatusCard(p);
+  p.statusCard.classList.add("visible");
+}
+
+function hideStatusCard(p) {
+  if (p.statusCard) p.statusCard.classList.remove("visible");
+}
+
+function installPetDrag(p) {
+  const el = p.el;
+  el.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const rect = el.getBoundingClientRect();
+    p.dragging = true;
+    p.dragMoved = false;
+    p.dragStartX = event.clientX;
+    p.dragStartY = event.clientY;
+    p.dragOffsetX = event.clientX - rect.left;
+    p.dragOffsetY = event.clientY - rect.top;
+    p.stateBeforeDrag = p.state;
+    p.state = "dragging";
+    p.rest = 0;
+    el.classList.add("dragging");
+    el.setPointerCapture(event.pointerId);
+    reportHotspots(true);
+  });
+  el.addEventListener("pointermove", (event) => {
+    if (!p.dragging) return;
+    if (!p.dragMoved && Math.hypot(event.clientX - p.dragStartX, event.clientY - p.dragStartY) >= 5) {
+      p.dragMoved = true;
+      pokeInteract();
+      bubble(p, pick(bubblePack(p).drag), false);
+      playPetAnim(p, "waiting", 1200);
+    }
+    if (!p.dragMoved) return;
+    p.x = Math.max(0, Math.min(innerWidth - p.size, event.clientX - p.dragOffsetX));
+    p.y = Math.max(0, Math.min(innerHeight - p.size, event.clientY - p.dragOffsetY));
+    el.style.left = p.x + "px";
+    el.style.top = p.y + "px";
+  });
+  const finishDrag = (event) => {
+    if (!p.dragging) return;
+    if (el.hasPointerCapture(event.pointerId)) el.releasePointerCapture(event.pointerId);
+    p.dragging = false;
+    el.classList.remove("dragging");
+    if (p.dragMoved) {
+      p.state = "drag-rest";
+      p.dragRestUntil = Date.now() + 10000;
+      p.suppressClickUntil = Date.now() + 350;
+      p.vx = 0;
+      p.vy = 0;
+      p.idleAnim = "idle";
+    } else {
+      p.state = p.stateBeforeDrag || "wander";
+    }
+    reportHotspots(true);
+  };
+  el.addEventListener("pointerup", finishDrag);
+  el.addEventListener("pointercancel", finishDrag);
 }
 
 // 收回：从桌面移除 DOM，宠物留在仓库
@@ -254,6 +517,8 @@ function storePet(id) {
     p.el = null;
     p.bodyEl = null;
   }
+  p.statusCard?.remove();
+  p.statusCard = null;
   p.status = "stored";
   persist();
   renderWarehouse();
@@ -264,7 +529,8 @@ function storePet(id) {
 function releasePet(id) {
   const p = pets.find((x) => x.id === id);
   if (!p || p.status !== "stored") return;
-  mountPet(p);
+  p.status = "active";
+  if (!IS_PANEL) mountPet(p);
   persist();
   renderWarehouse();
   updateEmpty();
@@ -275,6 +541,7 @@ function deletePet(id) {
   const p = pets.find((x) => x.id === id);
   if (!p) return;
   if (p.el) p.el.remove();
+  p.statusCard?.remove();
   pets = pets.filter((x) => x.id !== id);
   persist();
   renderWarehouse();
@@ -284,6 +551,7 @@ function deletePet(id) {
 let emptyTimer = null;
 function updateEmpty() {
   const empty = document.getElementById("empty");
+  if (!empty) return;
   const act = activePets();
   if (act.length) {
     clearTimeout(emptyTimer);
@@ -319,7 +587,6 @@ function addPets(input) {
     r.readAsDataURL(f);
   });
   input.value = "";
-  document.getElementById("modePicker").style.display = "none";
 }
 
 // 2D 精灵：示例（内置）或自定义上传
@@ -329,6 +596,7 @@ function spawnSpritePet(profile) {
     src: profile.sprite.src,
     mode: "sprite",
     sprite: profile.sprite,
+    cover: profile.cover || profile.sprite.cover,
   });
   persist();
   renderWarehouse();
@@ -336,7 +604,7 @@ function spawnSpritePet(profile) {
 }
 
 // 规范化用户自定义 config.json → 内部 sprite 配置 {src, frameW, frameH, actions}
-// 约定：actions 的 key 建议用 idle/walk/eat/happy（引擎自动触发的四种），其余 key 先存着等状态机扩充
+// 支持 Pinkmo 标准动作；旧素材仍可只提供 idle/walk/eat/happy。
 function normalizeSpriteConfig(cfg, src) {
   const frameW = cfg && Number(cfg.frameW) > 0 ? Number(cfg.frameW) : SPRITE_PRESET.frameW;
   const frameH = cfg && Number(cfg.frameH) > 0 ? Number(cfg.frameH) : SPRITE_PRESET.frameH;
@@ -400,14 +668,24 @@ function addSpritePets(input) {
   });
 
   input.value = "";
-  document.getElementById("modePicker").style.display = "none";
 }
 
 // ===== 点击互动 =====
 function onClick(p) {
+  if (Date.now() < p.suppressClickUntil) return;
   const now = Date.now();
   pokeInteract();
-  if (p.sprite) p.happyUntil = Date.now() + 1300; // sprite 宠物点一下播 happy 动作
+  setMood(p, "好开心！", 6000);
+  if (p.attentionMode) {
+    p.attentionMode = false;
+    p.state = "returning-home";
+    p.rest = 0;
+    p.vx = 0;
+    p.vy = 0;
+    playPetAnim(p, "happy", 1000);
+    bubble(p, pick(bubblePack(p).return), false);
+    return;
+  }
   p.clicks = p.clicks.filter((t) => now - t < 800);
   p.clicks.push(now);
   const n = p.clicks.length;
@@ -417,6 +695,7 @@ function onClick(p) {
     void p.el.offsetWidth;
     p.el.classList.add("shake");
     bubble(p, EGG.poke, false);
+    playPetAnim(p, "failed", 1300);
     p.clicks = [];
     return;
   }
@@ -430,12 +709,6 @@ function onClick(p) {
   }, 340);
 }
 
-const TALK = {
-  single: ["在呢~", "喵？", "想我啦？", "戳我干啥", "哼"],
-  double: ["嘿嘿", "喜欢我呀", "转个圈~"],
-  multi: ["好开心！", "你也好可爱", "转晕啦~"],
-  crazy: ["别戳啦！痒！", "再戳生气了", "轻点呀~"],
-};
 function pick(a) {
   return a[Math.floor(Math.random() * a.length)];
 }
@@ -443,12 +716,21 @@ function pick(a) {
 // 彩蛋文案
 const EGG = {
   poke: "别戳我啦！去找黑鼠吧",
-  neglect: "去群聊里吧，黑鼠找你",
 };
 
 let lastInteract = Date.now();
 function pokeInteract() {
   lastInteract = Date.now();
+}
+
+function startAttention(p) {
+  if (!p || p.dragging || p.state === "alert" || p.attentionMode) return;
+  p.attentionMode = true;
+  p.state = "following";
+  p.rest = 0;
+  setMood(p, "有点无聊", 10000);
+  bubble(p, pick(bubblePack(p).attention), false);
+  playPetAnim(p, "waiting", 1600);
 }
 
 function react(p, type) {
@@ -457,18 +739,33 @@ function react(p, type) {
   let txt = "";
   if (type === "single") {
     p.el.classList.add("bounce");
-    txt = pick(TALK.single);
+    playPetAnim(p, "jump", 900);
+    txt = pick(bubblePack(p).single);
   } else if (type === "double") {
     p.el.classList.add("spin");
-    txt = pick(TALK.double);
+    playPetAnim(p, "wave", 1100);
+    txt = pick(bubblePack(p).double);
   } else if (type === "multi") {
     p.el.classList.add("bounce");
-    txt = pick(TALK.multi);
+    playPetAnim(p, "happy", 1300);
+    txt = pick(bubblePack(p).multi);
   } else {
     p.el.classList.add("shake");
+    playPetAnim(p, "failed", 1300);
     txt = pick(TALK.crazy);
   }
   bubble(p, txt, false);
+  setMood(p, type === "multi" ? "开心转圈中" : "被摸摸啦", 5000);
+}
+
+function hasPetAnim(p, name) {
+  return Boolean(p.sprite && p.sprite.actions && p.sprite.actions[name]);
+}
+
+function playPetAnim(p, name, duration) {
+  if (!hasPetAnim(p, name)) return;
+  p.transientAnim = name;
+  p.transientUntil = Date.now() + duration;
 }
 
 function bubble(p, txt, alert) {
@@ -487,10 +784,15 @@ function bubble(p, txt, alert) {
 function spriteAnimFor(p) {
   const s = p.sprite;
   if (!s) return "idle";
-  if (p.happyUntil && Date.now() < p.happyUntil) return "happy";
-  if (p.state === "alert") return "happy";
-  if (p.rest > 0) return "idle";
-  if (Math.abs(p.vx) > 0.05 || Math.abs(p.vy) > 0.05) return "walk";
+  if (p.transientAnim && Date.now() < p.transientUntil) return p.transientAnim;
+  if (p.transientAnim) p.transientAnim = null;
+  if (p.state === "alert") return hasPetAnim(p, "waiting") ? "waiting" : "happy";
+  if (p.rest > 0) return hasPetAnim(p, p.idleAnim) ? p.idleAnim : "idle";
+  if (Math.abs(p.vx) > 0.05 || Math.abs(p.vy) > 0.05) {
+    if (p.vx < -0.05 && hasPetAnim(p, "walkLeft")) return "walkLeft";
+    if (p.vx > 0.05 && hasPetAnim(p, "walkRight")) return "walkRight";
+    return hasPetAnim(p, "walk") ? "walk" : "idle";
+  }
   return "idle";
 }
 
@@ -524,13 +826,63 @@ function tickSprite(p, now) {
 }
 
 // ===== 游走 loop =====
+function movePetToward(p, targetX, targetY, speed) {
+  const dx = targetX - p.x;
+  const dy = targetY - p.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= speed) {
+    p.x = targetX;
+    p.y = targetY;
+    p.vx = 0;
+    p.vy = 0;
+    return true;
+  }
+  p.vx = (dx / distance) * speed;
+  p.vy = (dy / distance) * speed;
+  p.x += p.vx;
+  p.y += p.vy;
+  return false;
+}
+
 function loop() {
   const now = performance.now();
   activePets().forEach((p) => {
+    if (p.dragging) {
+      if (p.sprite) tickSprite(p, now);
+      return;
+    }
     if (p.state === "alert") {
       if (p.sprite) tickSprite(p, now);
       return;
     }
+    if (p.state === "drag-rest") {
+      if (Date.now() >= p.dragRestUntil) p.state = "returning-home";
+      if (p.sprite) tickSprite(p, now);
+      return;
+    }
+    if (p.attentionMode) {
+      const tx = Math.max(8, Math.min(innerWidth - p.size - 8, mousePosition.x - p.size / 2));
+      const ty = Math.max(8, Math.min(innerHeight - p.size - 8, mousePosition.y - p.size - 24));
+      movePetToward(p, tx, ty, 4.2);
+      p.el.style.left = p.x + "px";
+      p.el.style.top = p.y + "px";
+      if (p.sprite) tickSprite(p, now);
+      return;
+    }
+    if (p.state === "returning-home") {
+      const b = patrolBounds(p.size);
+      const arrived = movePetToward(p, b.maxX - 70, b.maxY - 35, 5.2);
+      p.el.style.left = p.x + "px";
+      p.el.style.top = p.y + "px";
+      if (arrived) {
+        p.state = "wander";
+        p.vx = (Math.random() - 0.5) * 1.1;
+        p.vy = (Math.random() - 0.5) * 0.8;
+      }
+      if (p.sprite) tickSprite(p, now);
+      return;
+    }
+    if (Date.now() >= p.nextRoutineAt) startRoutine(p);
     if (p.rest > 0) {
       p.rest--;
       if (p.sprite) tickSprite(p, now);
@@ -538,28 +890,27 @@ function loop() {
     }
     p.x += p.vx;
     p.y += p.vy;
-    if (p.x < 10) {
-      p.x = 10;
+    const bounds = patrolBounds(p.size);
+    if (p.x < bounds.minX) {
+      p.x = bounds.minX;
       p.vx *= -1;
     }
-    if (p.x > innerWidth - p.size - 10) {
-      p.x = innerWidth - p.size - 10;
+    if (p.x > bounds.maxX) {
+      p.x = bounds.maxX;
       p.vx *= -1;
     }
-    if (p.y < 10) {
-      p.y = 10;
+    if (p.y < bounds.minY) {
+      p.y = bounds.minY;
       p.vy *= -1;
     }
-    if (p.y > innerHeight - p.size - 10) {
-      p.y = innerHeight - p.size - 10;
+    if (p.y > bounds.maxY) {
+      p.y = bounds.maxY;
       p.vy *= -1;
     }
     if (Math.random() < 0.004) {
       p.vx = (Math.random() - 0.5) * 1.4;
       p.vy = (Math.random() - 0.5) * 1.4;
     }
-    if (Math.random() < 0.003)
-      p.rest = Math.floor(60 + Math.random() * 180);
     p.el.style.left = p.x + "px";
     p.el.style.top = p.y + "px";
     if (p.sprite) tickSprite(p, now);
@@ -569,11 +920,15 @@ function loop() {
 
 // 把当前可交互区域（宠物/面板/展开按钮）的矩形上报给 Rust，用于动态切换穿透/捕获
 let lastReport = 0;
-function reportHotspots() {
+function reportHotspots(force = false) {
   const now = Date.now();
-  if (now - lastReport < 120) return;
+  if (!force && now - lastReport < 120) return;
   lastReport = now;
   const hs = [];
+  const dragging = activePets().some((p) => p.dragging);
+  if (dragging) {
+    hs.push({ x: 0, y: 0, w: innerWidth, h: innerHeight });
+  }
   activePets().forEach((p) => {
     const r = p.el.getBoundingClientRect();
     if (r.width && r.height)
@@ -647,11 +1002,88 @@ function fireAlert(msg, kind) {
 
 // ===== 启动 =====
 async function init() {
-  // 仅 macOS 开启"默认全窗穿透 + 全局钩子动态切换"；
-  // Windows/Linux 没有对应的全局鼠标钩子，若开启穿透将永远点不到宠物，
-  // 因此保持窗口默认可交互（透明空白区会挡住桌面点击，属已知取舍）
-  const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
-  if (isMac) {
+  if (!IS_PANEL) {
+    const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+    if (isMac) {
+      try { await getCurrentWindow().setIgnoreCursorEvents(true); } catch (e) { console.warn("穿透不可用", e); }
+    }
+  }
+  await initStore();
+  let saved = null;
+  try { saved = store ? await store.get("pets") : JSON.parse(localStorage.getItem("pet-backup") || "{}").pets; } catch (e) {}
+  function loadProfiles(profiles) {
+    pets.forEach((p) => { p.el?.remove(); p.statusCard?.remove(); });
+    pets = [];
+    idc = 0;
+    (profiles || []).forEach((p) => {
+      const isOldDemo = p.name === "示例精灵" && p.mode === "sprite" && p.sprite && String(p.sprite.src || "").startsWith("data:image/svg+xml");
+      if (isOldDemo) { p.src = DEMO_SPRITE.src; p.sprite = DEMO_SPRITE; p.cover = DEMO_SPRITE.cover; p.name = "莓啵"; }
+      spawnPet(p, p.status);
+    });
+  }
+  loadProfiles(saved);
+  applySettingsToUI();
+  updateEmpty();
+  await listen("store-changed", (event) => {
+    const payload = event.payload || {};
+    Object.assign(settings, payload.settings || {});
+    loadProfiles(payload.pets || []);
+    if (IS_PANEL) {
+      applySettingsToUI();
+      return;
+    }
+    updateEmpty();
+  });
+  if (!IS_PANEL) {
+    document.addEventListener("pointermove", (event) => { mousePosition = { x: event.clientX, y: event.clientY }; });
+    loop();
+    setInterval(() => { const act = activePets(); if (settings.attentionEnabled !== false && act.length && Date.now() - lastInteract >= attentionDelayMs() && !act.some((p) => p.attentionMode)) startAttention(act[Math.floor(Math.random() * act.length)]); }, 5000);
+    setInterval(async () => { try { const cursor = await invoke("get_cursor_position"); if (Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) mousePosition = cursor; } catch (e) {} }, 120);
+    setInterval(reportHotspots, 120);
+    setInterval(checkAlerts, 10000);
+    return;
+  }
+  setupPanel();
+}
+
+function setupPanel() {
+  const viewCopy = {
+    upload: ["上传宠物", "把喜欢的伙伴带到桌面上吧"], warehouse: ["宠物仓库", "管理每一位桌面伙伴"],
+    actions: ["动作管理", "查看精灵的动作配置"], reminders: ["提醒事项", "让宠物在需要时来叫你"], settings: ["设置", "调整陪伴节奏"],
+  };
+  const showView = (name) => {
+    document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+    document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
+    document.getElementById("viewTitle").textContent = viewCopy[name][0]; document.getElementById("viewSub").textContent = viewCopy[name][1];
+  };
+  document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+  document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => showView(b.dataset.go)));
+  document.getElementById("modeImage").addEventListener("click", () => document.getElementById("file").click());
+  document.getElementById("modeSpriteDemo").addEventListener("click", () => spawnSpritePet({ name: "莓啵", sprite: DEMO_SPRITE }));
+  document.getElementById("modeSpriteUpload").addEventListener("click", () => document.getElementById("spriteFile").click());
+  document.getElementById("file").addEventListener("change", (e) => addPets(e.target));
+  document.getElementById("spriteFile").addEventListener("change", (e) => addSpritePets(e.target));
+  document.getElementById("attentionMinutes").addEventListener("change", (e) => { settings.attentionMinutes = Math.max(1, Math.min(240, parseInt(e.target.value) || 20)); e.target.value = settings.attentionMinutes; persist(); });
+  document.getElementById("attentionEnabled").addEventListener("click", (e) => { settings.attentionEnabled = !e.currentTarget.classList.contains("on"); e.currentTarget.classList.toggle("on", settings.attentionEnabled); e.currentTarget.setAttribute("aria-checked", String(settings.attentionEnabled)); persist(); });
+  document.getElementById("speechStyle").addEventListener("change", (e) => { settings.speechStyle = e.target.value; persist(); });
+  document.getElementById("petSize").addEventListener("input", (e) => { settings.petSize = Math.max(70, Math.min(180, Number(e.target.value) || 120)); document.getElementById("petSizeValue").textContent = settings.petSize + " px"; });
+  document.getElementById("petSize").addEventListener("change", () => persist());
+  const wh = document.getElementById("petWarehouse");
+  wh.addEventListener("input", (e) => { const card = e.target.closest(".pet-card"); const p = card && pets.find((x) => x.id == card.dataset.id); if (!p) return; if (e.target.classList.contains("p-name")) p.name = e.target.value; else if (e.target.classList.contains("p-hobby")) p.hobby = e.target.value; else if (e.target.classList.contains("p-personality")) p.personality = e.target.value; persist(); });
+  wh.addEventListener("click", (e) => { const card = e.target.closest(".pet-card"); const p = card && pets.find((x) => x.id == card.dataset.id); if (!p) return; if (e.target.classList.contains("p-toggle")) p.status === "active" ? storePet(p.id) : releasePet(p.id); else if (e.target.classList.contains("p-cover")) { coverTargetId = p.id; document.getElementById("coverFile").click(); } else if (e.target.classList.contains("p-del")) { if (card.classList.contains("confirming")) deletePet(p.id); else { card.classList.add("confirming"); e.target.textContent = "确认?"; setTimeout(() => { if (card.isConnected) { card.classList.remove("confirming"); e.target.textContent = "✕"; } }, 2000); } } });
+  document.getElementById("coverFile").addEventListener("change", (e) => { const file = e.target.files?.[0]; const p = pets.find((item) => item.id === coverTargetId); if (!file || !p) return; const reader = new FileReader(); reader.onload = (event) => { p.cover = event.target.result; persist(); renderWarehouse(); }; reader.readAsDataURL(file); e.target.value = ""; });
+  document.getElementById("addReminder").addEventListener("click", () => { settings.reminders.push({ id: "r" + Date.now(), label: "", type: "time", time: "12:00", interval: 30, message: "", repeat: "daily", enabled: true }); renderReminders(); persist(); });
+  const list = document.getElementById("reminderList");
+  const changeReminder = (e) => { const row = e.target.closest(".reminder"); const r = row && settings.reminders.find((x) => x.id === row.dataset.id); if (!r) return; if (e.target.classList.contains("r-label")) r.label = e.target.value; else if (e.target.classList.contains("r-time")) r.time = e.target.value; else if (e.target.classList.contains("r-msg")) r.message = e.target.value; else if (e.target.classList.contains("r-repeat")) r.repeat = e.target.value; else if (e.target.classList.contains("r-interval")) r.interval = parseInt(e.target.value) || 1; else if (e.target.classList.contains("r-enabled")) r.enabled = e.target.checked; else if (e.target.classList.contains("r-type")) { r.type = e.target.value; renderReminders(); } persist(); };
+  list.addEventListener("input", changeReminder); list.addEventListener("change", changeReminder); list.addEventListener("click", (e) => { const row = e.target.closest(".reminder"); const reminder = row && settings.reminders.find((x) => x.id === row.dataset.id); if (!reminder) return; if (e.target.classList.contains("r-complete")) { if (reminder.type === "interval") reminder.completedAt = Date.now(); else reminder.completedDay = todayKey(); renderReminders(); persist(); return; } if (e.target.classList.contains("r-del")) { settings.reminders = settings.reminders.filter((x) => x.id !== row.dataset.id); renderReminders(); persist(); } });
+}
+
+/* legacy single-window init kept below during migration */
+async function legacyInit() {
+  // macOS 与 Windows 都有原生全局鼠标钩子，因此透明区域默认穿透。
+  // Linux 暂保持可交互，避免无钩子时宠物永远点不到。
+  const supportsNativeClickThrough = /Mac|iPhone|iPad|Win/i.test(navigator.platform || navigator.userAgent);
+  if (supportsNativeClickThrough) {
     try {
       await getCurrentWindow().setIgnoreCursorEvents(true);
     } catch (e) {
@@ -673,7 +1105,19 @@ async function init() {
     } catch (e) {}
   }
   if (saved && saved.length) {
-    saved.forEach((p) => spawnPet(p, p.status));
+    saved.forEach((p) => {
+      const isOldDemo =
+        p.name === "示例精灵" &&
+        p.mode === "sprite" &&
+        p.sprite &&
+        !p.sprite.presetId &&
+        String(p.sprite.src || "").startsWith("data:image/svg+xml");
+      if (isOldDemo) {
+        p.src = DEMO_SPRITE.src;
+        p.sprite = DEMO_SPRITE;
+      }
+      spawnPet(p, p.status);
+    });
   }
   renderWarehouse();
   updateEmpty();
@@ -701,6 +1145,11 @@ async function init() {
   document.getElementById("toggleBtn").addEventListener("click", togglePanel);
   document.getElementById("file").addEventListener("change", (e) => addPets(e.target));
   document.getElementById("spriteFile").addEventListener("change", (e) => addSpritePets(e.target));
+  document.getElementById("attentionMinutes").addEventListener("change", (e) => {
+    settings.attentionMinutes = Math.max(1, Math.min(240, parseInt(e.target.value) || 20));
+    e.target.value = settings.attentionMinutes;
+    persist();
+  });
 
   // 仓库：事件委托
   const wh = document.getElementById("petWarehouse");
@@ -790,15 +1239,23 @@ async function init() {
     persist();
   });
 
+  document.addEventListener("pointermove", (event) => {
+    mousePosition = { x: event.clientX, y: event.clientY };
+  });
+
   loop();
   setInterval(() => {
     const act = activePets();
-    if (act.length && Date.now() - lastInteract > 5 * 60000) {
-      const p = act[Math.floor(Math.random() * act.length)];
-      bubble(p, EGG.neglect, false);
-      lastInteract = Date.now();
+    if (act.length && Date.now() - lastInteract >= attentionDelayMs() && !act.some((p) => p.attentionMode)) {
+      startAttention(act[Math.floor(Math.random() * act.length)]);
     }
-  }, 30000);
+  }, 5000);
+  setInterval(async () => {
+    try {
+      const cursor = await invoke("get_cursor_position");
+      if (Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) mousePosition = cursor;
+    } catch (e) {}
+  }, 120);
   setInterval(reportHotspots, 120);
   setInterval(checkAlerts, 10000);
 }
