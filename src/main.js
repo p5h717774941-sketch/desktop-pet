@@ -973,8 +973,11 @@ function fireAlert(msg, kind) {
 // ===== 启动 =====
 async function init() {
   if (!IS_PANEL) {
-    const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
-    if (isMac) {
+    // macOS 和 Windows 都依赖原生钩子在宠物热区与透明区域之间切换。
+    // 必须先实际开启穿透；否则 Windows 在没有宠物热区时会认为已经穿透，
+    // 但全屏透明宠物窗仍会盖住控制面板。
+    const supportsNativeClickThrough = /Mac|iPhone|iPad|Win/i.test(navigator.platform || navigator.userAgent);
+    if (supportsNativeClickThrough) {
       try { await getCurrentWindow().setIgnoreCursorEvents(true); } catch (e) { console.warn("穿透不可用", e); }
     }
   }
