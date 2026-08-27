@@ -55,8 +55,8 @@ npm run tauri build      # 产物在 src-tauri/target/release/bundle/
 推送 `v*` 格式的标签会触发 `.github/workflows/release.yml`，自动构建 macOS 与 Windows 安装包并创建 GitHub Release：
 
 ```bash
-git tag v1.10.0
-git push origin v1.10.0
+git tag v1.10.1
+git push origin v1.10.1
 ```
 
 Windows 会产出 NSIS `.exe`，macOS 会产出 `.dmg` / `.app`。

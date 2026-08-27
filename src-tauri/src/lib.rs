@@ -172,7 +172,9 @@ mod macos {
 #[cfg(target_os = "windows")]
 mod windows {
     use super::*;
-    use windows::Win32::{
+    // 这里必须从 crate root 导入。模块本身也叫 `windows`，否则 Windows
+    // 编译时会把 `windows` 同时解析为当前模块和依赖 crate。
+    use ::windows::Win32::{
         Foundation::{LPARAM, LRESULT, WPARAM},
         UI::WindowsAndMessaging::{
             CallNextHookEx, SetWindowsHookExW, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEMOVE,
