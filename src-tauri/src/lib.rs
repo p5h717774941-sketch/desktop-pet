@@ -281,10 +281,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![set_hotspots, get_cursor_position])
         .on_window_event(|window, event| {
-            // 红色关闭按钮不结束桌面宠物，只收起控制面板；从程序坞重新激活即可打开。
+            // 关闭控制面板不结束桌面宠物。macOS 收起到程序坞；Windows 最小化到任务栏，
+            // 这样宠物窗不会作为独立任务栏项出现，主面板也能随时恢复。
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
+                    #[cfg(target_os = "windows")]
+                    let _ = window.minimize();
+                    #[cfg(not(target_os = "windows"))]
                     let _ = window.hide();
                 }
             }
