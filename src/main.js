@@ -522,7 +522,6 @@ function storePet(id) {
   p.status = "stored";
   persist();
   renderWarehouse();
-  updateEmpty();
 }
 
 // 放出：从仓库重新挂到桌面
@@ -533,7 +532,6 @@ function releasePet(id) {
   if (!IS_PANEL) mountPet(p);
   persist();
   renderWarehouse();
-  updateEmpty();
 }
 
 // 删除：彻底移除（两段式确认，在事件层处理）
@@ -545,32 +543,6 @@ function deletePet(id) {
   pets = pets.filter((x) => x.id !== id);
   persist();
   renderWarehouse();
-  updateEmpty();
-}
-
-let emptyTimer = null;
-function updateEmpty() {
-  const empty = document.getElementById("empty");
-  if (!empty) return;
-  const act = activePets();
-  if (act.length) {
-    clearTimeout(emptyTimer);
-    empty.style.display = "none";
-    return;
-  }
-  if (pets.length === 0) {
-    empty.querySelector(".big").textContent = "🐾";
-    empty.querySelector(".txt").textContent = "点左上角「上传宠物」添加第一只";
-    empty.style.display = "flex";
-    return;
-  }
-  empty.querySelector(".big").textContent = "🏠";
-  empty.querySelector(".txt").textContent = "宠物都收回仓库啦，去面板放出来吧";
-  empty.style.display = "flex";
-  clearTimeout(emptyTimer);
-  emptyTimer = setTimeout(() => {
-    empty.style.display = "none";
-  }, 3000);
 }
 
 function addPets(input) {
@@ -582,7 +554,6 @@ function addPets(input) {
       spawnPet({ name: f.name.replace(/\.[^.]+$/, ""), src: e.target.result, mode: "image" });
       persist();
       renderWarehouse();
-      updateEmpty();
     };
     r.readAsDataURL(f);
   });
@@ -600,7 +571,6 @@ function spawnSpritePet(profile) {
   });
   persist();
   renderWarehouse();
-  updateEmpty();
 }
 
 // 规范化用户自定义 config.json → 内部 sprite 配置 {src, frameW, frameH, actions}
@@ -1023,7 +993,6 @@ async function init() {
   }
   loadProfiles(saved);
   applySettingsToUI();
-  updateEmpty();
   await listen("store-changed", (event) => {
     const payload = event.payload || {};
     Object.assign(settings, payload.settings || {});
@@ -1032,7 +1001,6 @@ async function init() {
       applySettingsToUI();
       return;
     }
-    updateEmpty();
   });
   if (!IS_PANEL) {
     document.addEventListener("pointermove", (event) => { mousePosition = { x: event.clientX, y: event.clientY }; });
@@ -1120,7 +1088,6 @@ async function legacyInit() {
     });
   }
   renderWarehouse();
-  updateEmpty();
 
   // 上传：先展开模式选择
   document.getElementById("uploadBtn").addEventListener("click", () => {
