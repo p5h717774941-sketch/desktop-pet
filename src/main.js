@@ -1,8 +1,10 @@
 import { load } from "@tauri-apps/plugin-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { DEMO_SPRITE, SPRITE_PRESET } from "./sprite-demo.js";
+import { createFenzaiProfile } from "./fenzai-sprite.js";
+import "./fenzai.css";
 
 // ===== 状态 =====
 // 宠物档案对象：{ id, name, hobby, personality, src, mode, status, sprite?, ...运行时字段 }
@@ -28,6 +30,8 @@ const settings = {
   attentionEnabled: true,
   speechStyle: "default",
   petSize: 120,
+  petSizeScope: "all",
+  petSizePetId: null,
 };
 
 // ===== 持久化 =====
@@ -60,6 +64,7 @@ function petProfile(p) {
     status: p.status || "active",
     sprite: p.sprite || null,
     cover: p.cover || p.src,
+    size: p.size,
   };
 }
 
@@ -79,6 +84,158 @@ async function persist() {
     localStorage.setItem("pet-backup", JSON.stringify(payload));
     await emit("store-changed", payload);
   } catch (e) {}
+}
+
+function isDataImage(value) {
+  return typeof value === "string" && value.startsWith("data:image/");
+}
+
+function dataUrlParts(value) {
+  const match = String(value || "").match(/^data:([^;,]+);base64,(.+)$/);
+  return match ? { mime: match[1], data: match[2] } : null;
+}
+
+async function saveUserFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  // 分块避免大图片在 String.fromCharCode 时超过调用栈限制。
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const path = await invoke("save_user_asset", { filename: file.name || "pet.png", dataBase64: btoa(binary) });
+  return convertFileSrc(path);
+}
+
+async function migrateDataImage(value, filename) {
+  const parsed = dataUrlParts(value);
+  if (!parsed) return value;
+  const extension = parsed.mime.split("/")[1] || "png";
+  const path = await invoke("save_user_asset", { filename: `${filename}.${extension}`, dataBase64: parsed.data });
+  return convertFileSrc(path);
+}
+
+async function migrateLegacyAssets(profiles) {
+  let changed = false;
+  for (const p of profiles || []) {
+    // 内置资源由代码重新提供，不能也不需要迁移。
+    if (p.sprite?.presetId === "fenzai-v1") continue;
+    if (isDataImage(p.src)) { p.src = await migrateDataImage(p.src, p.name || "pet"); changed = true; }
+    if (p.sprite && isDataImage(p.sprite.src)) { p.sprite.src = await migrateDataImage(p.sprite.src, `${p.name || "pet"}-sprite`); changed = true; }
+    if (isDataImage(p.cover)) { p.cover = await migrateDataImage(p.cover, `${p.name || "pet"}-cover`); changed = true; }
+  }
+  return changed;
+}
+
+// ===== 仓库封面裁剪（固定 3:4，支持拖动与缩放） =====
+let coverCrop = null;
+
+function clampCoverCrop() {
+  if (!coverCrop) return;
+  const { viewport, image } = coverCrop;
+  const maxX = image.offsetLeft + image.clientWidth - coverCrop.width;
+  const maxY = image.offsetTop + image.clientHeight - coverCrop.height;
+  coverCrop.x = Math.max(image.offsetLeft, Math.min(maxX, coverCrop.x));
+  coverCrop.y = Math.max(image.offsetTop, Math.min(maxY, coverCrop.y));
+}
+
+function renderCoverCrop() {
+  if (!coverCrop) return;
+  clampCoverCrop();
+  const selection = document.getElementById("cropSelection");
+  selection.style.left = coverCrop.x + "px";
+  selection.style.top = coverCrop.y + "px";
+  selection.style.width = coverCrop.width + "px";
+  selection.style.height = coverCrop.height + "px";
+}
+
+function closeCoverCropper() {
+  const modal = document.getElementById("coverCropper");
+  if (coverCrop?.url) URL.revokeObjectURL(coverCrop.url);
+  coverCrop = null;
+  modal.hidden = true;
+}
+
+function openCoverCropper(file) {
+  const modal = document.getElementById("coverCropper");
+  const viewport = document.getElementById("cropViewport");
+  const image = document.getElementById("cropImage");
+  const url = URL.createObjectURL(file);
+  modal.hidden = false;
+  image.onload = () => {
+    const scale = Math.min(viewport.clientWidth / image.naturalWidth, viewport.clientHeight / image.naturalHeight);
+    image.style.width = image.naturalWidth * scale + "px";
+    image.style.height = image.naturalHeight * scale + "px";
+    image.style.left = (viewport.clientWidth - image.naturalWidth * scale) / 2 + "px";
+    image.style.top = (viewport.clientHeight - image.naturalHeight * scale) / 2 + "px";
+    const maxWidth = image.naturalWidth * scale;
+    const maxHeight = image.naturalHeight * scale;
+    const height = Math.min(maxHeight, maxWidth / .75, 300);
+    const width = height * .75;
+    coverCrop = { file, url, viewport, image, scale, width, height, x: image.offsetLeft + (maxWidth - width) / 2, y: image.offsetTop + (maxHeight - height) / 2 };
+    renderCoverCrop();
+  };
+  image.src = url;
+}
+
+function setupCoverCropper() {
+  const modal = document.getElementById("coverCropper");
+  const viewport = document.getElementById("cropViewport");
+  const selection = document.getElementById("cropSelection");
+  document.getElementById("cropCancel").addEventListener("click", closeCoverCropper);
+  document.getElementById("cropCancelTop").addEventListener("click", closeCoverCropper);
+  selection.addEventListener("pointerdown", (event) => {
+    if (!coverCrop) return;
+    selection.setPointerCapture(event.pointerId);
+    const handle = event.target.closest(".crop-handle")?.className.split(" ").at(-1);
+    coverCrop.drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startX: coverCrop.x, startY: coverCrop.y, startW: coverCrop.width, handle };
+    selection.classList.add("dragging");
+  });
+  selection.addEventListener("pointermove", (event) => {
+    const drag = coverCrop?.drag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.handle) {
+      coverCrop.x = drag.startX + dx;
+      coverCrop.y = drag.startY + dy;
+    } else {
+      const signX = drag.handle.includes("w") ? -1 : 1;
+      const signY = drag.handle.includes("n") ? -1 : 1;
+      const delta = Math.abs(dx) > Math.abs(dy) ? dx * signX : dy * signY;
+      const maxW = Math.min(coverCrop.image.clientWidth, coverCrop.image.clientHeight * .75);
+      const width = Math.max(72, Math.min(maxW, drag.startW + delta));
+      const height = width / .75;
+      coverCrop.width = width;
+      coverCrop.height = height;
+      if (drag.handle.includes("w")) coverCrop.x = drag.startX + drag.startW - width;
+      if (drag.handle.includes("n")) coverCrop.y = drag.startY + drag.startW / .75 - height;
+    }
+    renderCoverCrop();
+  });
+  const endDrag = () => { if (coverCrop) coverCrop.drag = null; selection.classList.remove("dragging"); };
+  selection.addEventListener("pointerup", endDrag);
+  selection.addEventListener("pointercancel", endDrag);
+  document.getElementById("cropConfirm").addEventListener("click", async () => {
+    if (!coverCrop) return;
+    const state = coverCrop;
+    const p = pets.find((item) => item.id === coverTargetId);
+    if (!p) return closeCoverCropper();
+    const canvas = document.createElement("canvas");
+    canvas.width = 600;
+    canvas.height = 800;
+    const ratio = canvas.width / state.width;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(state.image, (state.image.offsetLeft - state.x) * ratio, (state.image.offsetTop - state.y) * ratio, state.image.clientWidth * ratio, state.image.clientHeight * ratio);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) return;
+    try {
+      p.cover = await saveUserFile(new File([blob], "pinkmo-cover.png", { type: "image/png" }));
+      await persist();
+      renderWarehouse();
+      closeCoverCropper();
+    } catch (err) {
+      console.error("保存裁剪封面失败", err);
+      alert(`无法保存封面：${String(err)}`);
+    }
+  });
 }
 
 // 当前放出的宠物（有 DOM 元素在桌面游走的）
@@ -126,22 +283,46 @@ function applySettingsToUI() {
   const speechStyle = document.getElementById("speechStyle");
   if (speechStyle) speechStyle.value = settings.speechStyle || "default";
   const petSize = document.getElementById("petSize");
-  if (petSize) petSize.value = normalizedPetSize();
+  const scope = settings.petSizeScope === "single" ? "single" : "all";
+  settings.petSizeScope = scope;
+  const sizeScope = document.getElementById("petSizeScope");
+  if (sizeScope) sizeScope.value = scope;
+  const target = document.getElementById("petSizeTarget");
+  const targetRow = document.getElementById("petSizeTargetRow");
+  if (target) {
+    if (!pets.some((p) => p.id === Number(settings.petSizePetId))) settings.petSizePetId = pets[0]?.id || null;
+    target.innerHTML = pets.map((p) => `<option value="${p.id}">${escapeAttr(p.name)}</option>`).join("");
+    target.value = String(settings.petSizePetId || "");
+  }
+  if (targetRow) targetRow.style.display = scope === "single" ? "flex" : "none";
+  const shownSize = scope === "single" ? pets.find((p) => p.id === Number(settings.petSizePetId))?.size : settings.petSize;
+  if (petSize) petSize.value = normalizedPetSize(shownSize);
   const petSizeValue = document.getElementById("petSizeValue");
-  if (petSizeValue) petSizeValue.textContent = normalizedPetSize() + " px";
+  if (petSizeValue) petSizeValue.textContent = normalizedPetSize(shownSize) + " px";
 }
 
 function renderActionManager() {
   const box = document.getElementById("actionManager");
   if (!box) return;
-  const spritePets = pets.filter((p) => p.mode === "sprite" && p.sprite?.actions);
-  if (!spritePets.length) {
-    box.innerHTML = '<div class="empty-card">还没有 2D 精灵。添加“示例精灵”后，就能在这里看到它的动作。</div>';
+  if (!pets.length) {
+    box.innerHTML = '<div class="empty-card">还没有宠物可管理。</div>';
     return;
   }
-  box.innerHTML = spritePets.flatMap((p) => Object.entries(p.sprite.actions).map(([name, a]) =>
-    `<div class="action-card"><strong>${escapeAttr(p.name)} · ${escapeAttr(name)}</strong><small>第 ${Number(a.row) + 1} 行 · ${a.count} 帧 · ${a.fps || 8} fps</small></div>`
-  )).join("");
+  if (!pets.some((p) => p.id === settings.actionPetId)) settings.actionPetId = pets[0].id;
+  const p = pets.find((item) => item.id === settings.actionPetId) || pets[0];
+  const actionNames = {
+    idle: "站立待机", idleSit: "坐姿待机", lookAround: "好奇张望", sleep: "趴下睡觉", groom: "舔爪洗脸", stretch: "伸懒腰", yawn: "打哈欠", walkRight: "向右走", walkLeft: "向左走", wave: "挥爪", jump: "跳跃",
+    failed: "委屈", waiting: "等待", working: "工作", review: "查看", happy: "开心", eat: "吃东西",
+  };
+  const actions = p.sprite?.actions || {};
+  const picker = document.getElementById("actionPetSelect");
+  if (picker) picker.innerHTML = pets.map((item) => `<option value="${item.id}"${item.id === p.id ? " selected" : ""}>${escapeAttr(item.name)}</option>`).join("");
+  box.innerHTML = `<div class="action-grid">${Object.entries(actionNames).map(([name, label]) => {
+      const a = actions[name];
+      return a
+        ? `<div class="action-card"><strong>${label}</strong><small>已解锁 · ${a.count} 帧 · ${a.fps || 8} fps</small></div>`
+        : `<div class="action-card locked"><strong>${label}</strong><small>未解锁</small></div>`;
+    }).join("")}</div>`;
 }
 
 function attentionDelayMs() {
@@ -149,8 +330,8 @@ function attentionDelayMs() {
   return minutes * 60 * 1000;
 }
 
-function normalizedPetSize() {
-  return Math.max(70, Math.min(180, Number(settings.petSize) || 120));
+function normalizedPetSize(value = settings.petSize) {
+  return Math.max(60, Math.min(320, Number(value) || 120));
 }
 
 function resizePet(p, size = normalizedPetSize()) {
@@ -239,6 +420,7 @@ function renderWarehouse() {
   }
   pets.forEach((p) => {
     const active = p.status === "active";
+    const official = p.sprite?.presetId === "fenzai-v1";
     const modeTag =
       p.mode === "sprite" ? "2D" : p.mode === "vrm" ? "3D" : "图";
     const card = document.createElement("div");
@@ -252,10 +434,10 @@ function renderWarehouse() {
         <input class="p-personality" value="${escapeAttr(p.personality || "")}" placeholder="性格（可选）" />
       </div>
       <div class="p-actions">
-        <span class="p-status"><span class="p-mode">${modeTag}</span>${active ? " 正在陪伴" : " 在仓库休息"}</span>
+        <span class="p-status"><span class="p-mode">${modeTag}</span>${official ? " 官方内置" : active ? " 正在陪伴" : " 在仓库休息"}</span>
         <button class="p-toggle" title="${active ? "收回" : "放出"}">${active ? "收回" : "放出"}</button>
         <button class="p-cover" title="更换封面">封面</button>
-        <button class="p-del" title="删除">✕</button>
+        ${official ? '<button class="p-del" disabled title="官方宠物不可删除">内置</button>' : '<button class="p-del" title="删除">✕</button>'}
       </div>`;
     box.appendChild(card);
   });
@@ -271,7 +453,7 @@ function spawnPet(profile, status) {
   } else {
     pid = ++idc;
   }
-  const size = normalizedPetSize();
+  const size = normalizedPetSize(profile.size);
   const start = randomPatrolPosition(size);
   const p = {
     id: pid,
@@ -324,6 +506,7 @@ function spawnPet(profile, status) {
 // 计算 sprite 网格的行列数（用于 background-size 缩放）
 function spriteGrid(sprite) {
   if (!sprite || !sprite.actions) return { rows: 1, cols: 1 };
+  if (sprite.grid?.cols && sprite.grid?.rows) return sprite.grid;
   const acts = Object.values(sprite.actions);
   const rows = Math.max(...acts.map((a) => (a.row || 0) + 1));
   const cols = Math.max(...acts.map((a) => a.count || 1));
@@ -334,7 +517,7 @@ function spriteGrid(sprite) {
 function mountPet(p) {
   if (IS_PANEL || !document.getElementById("stage")) return;
   const el = document.createElement("div");
-  el.className = "pet";
+  el.className = "pet" + (p.mode === "sprite" ? " sprite-pet" : "");
   if (p.mode === "sprite" && p.sprite) {
     const grid = spriteGrid(p.sprite);
     const body = document.createElement("div");
@@ -363,6 +546,10 @@ function mountPet(p) {
   el.style.top = p.y + "px";
   p.el = el;
   el.addEventListener("click", () => onClick(p));
+  el.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    showPetActionMenu(p, event.clientX, event.clientY);
+  });
   el.addEventListener("pointerenter", () => {
     clearTimeout(p.statusTimer);
     p.statusTimer = setTimeout(() => showStatusCard(p), 450);
@@ -395,6 +582,7 @@ const ROUTINE_TALK = {
   working: ["我也认真一会儿。", "专注陪伴中……"],
   review: ["让我想想看。", "发一小会儿呆。"],
   idle: ["今天天气不错。", "安静待在你身边。"],
+  sleep: ["我先眯一会儿。", "安静休息一下。"],
 };
 
 function scheduleNextRoutine(p) {
@@ -403,13 +591,13 @@ function scheduleNextRoutine(p) {
 
 function startRoutine(p) {
   if (p.dragging || p.attentionMode || p.state !== "wander" || p.rest > 0) return;
-  const choices = ["eat", "working", "review", "idle"].filter((name) => hasPetAnim(p, name));
+  const choices = ["eat", "working", "review", "idle", "idleSit", "lookAround", "sleep"].filter((name) => hasPetAnim(p, name));
   if (!choices.length) { scheduleNextRoutine(p); return; }
   const action = pick(choices);
   p.idleAnim = action;
   p.rest = Math.floor(180 + Math.random() * 240);
   p.routineUntil = Date.now() + (p.rest / 60) * 1000;
-  setMood(p, action === "eat" ? "正在吃点心" : action === "working" ? "认真陪伴中" : "悠闲发呆中", (p.rest / 60) * 1000);
+  setMood(p, action === "eat" ? "正在吃点心" : action === "working" ? "认真陪伴中" : action === "sleep" ? "正在小憩" : "悠闲发呆中", (p.rest / 60) * 1000);
   bubble(p, pick(ROUTINE_TALK[action]), false);
   scheduleNextRoutine(p);
 }
@@ -498,7 +686,7 @@ function installPetDrag(p) {
       p.suppressClickUntil = Date.now() + 350;
       p.vx = 0;
       p.vy = 0;
-      p.idleAnim = "idle";
+      p.idleAnim = p.sprite?.defaultIdle || "idle";
     } else {
       p.state = p.stateBeforeDrag || "wander";
     }
@@ -537,7 +725,7 @@ function releasePet(id) {
 // 删除：彻底移除（两段式确认，在事件层处理）
 function deletePet(id) {
   const p = pets.find((x) => x.id === id);
-  if (!p) return;
+  if (!p || p.sprite?.presetId === "fenzai-v1") return;
   if (p.el) p.el.remove();
   p.statusCard?.remove();
   pets = pets.filter((x) => x.id !== id);
@@ -545,18 +733,20 @@ function deletePet(id) {
   renderWarehouse();
 }
 
-function addPets(input) {
+async function addPets(input) {
   const files = input.files;
   if (!files.length) return;
-  [...files].forEach((f) => {
-    const r = new FileReader();
-    r.onload = (e) => {
-      spawnPet({ name: f.name.replace(/\.[^.]+$/, ""), src: e.target.result, mode: "image" });
-      persist();
-      renderWarehouse();
-    };
-    r.readAsDataURL(f);
-  });
+  for (const f of [...files]) {
+    try {
+      const src = await saveUserFile(f);
+      spawnPet({ name: f.name.replace(/\.[^.]+$/, ""), src, mode: "image" });
+    } catch (e) {
+      console.error("保存宠物图片失败", e);
+      alert(`无法导入「${f.name}」：${String(e)}`);
+    }
+  }
+  await persist();
+  renderWarehouse();
   input.value = "";
 }
 
@@ -626,21 +816,28 @@ function addSpritePets(input) {
       })
     : Promise.resolve(null);
 
-  readConfig.then((cfg) => {
-    imgs.forEach((f) => {
-      const r = new FileReader();
-      r.onload = (e) => {
-        const sprite = normalizeSpriteConfig(cfg, e.target.result);
+  readConfig.then(async (cfg) => {
+    for (const f of imgs) {
+      try {
+        const src = await saveUserFile(f);
+        const sprite = normalizeSpriteConfig(cfg, src);
         spawnSpritePet({ name: f.name.replace(/\.[^.]+$/, ""), sprite });
-      };
-      r.readAsDataURL(f);
-    });
+      } catch (e) {
+        console.error("保存 sprite 失败", e);
+        alert(`无法导入「${f.name}」：${String(e)}`);
+      }
+    }
   });
 
   input.value = "";
 }
 
 // ===== 点击互动 =====
+function petAnimationDuration(p, name, fallback = 1000) {
+  const action = p.sprite?.actions?.[name];
+  return action ? ((action.count || 1) / (action.fps || 8)) * 1000 + 200 : fallback;
+}
+
 function onClick(p) {
   if (Date.now() < p.suppressClickUntil) return;
   const now = Date.now();
@@ -652,7 +849,7 @@ function onClick(p) {
     p.rest = 0;
     p.vx = 0;
     p.vy = 0;
-    playPetAnim(p, "happy", 1000);
+    playPetAnim(p, "happy", petAnimationDuration(p, "happy", 1000));
     bubble(p, pick(bubblePack(p).return), false);
     return;
   }
@@ -700,7 +897,9 @@ function startAttention(p) {
   p.rest = 0;
   setMood(p, "有点无聊", 10000);
   bubble(p, pick(bubblePack(p).attention), false);
-  playPetAnim(p, "waiting", 1600);
+  const waiting = p.sprite?.actions?.waiting;
+  const waitingDuration = waiting ? ((waiting.count || 1) / (waiting.fps || 8)) * 1000 + 200 : 1600;
+  playPetAnim(p, "waiting", waitingDuration);
 }
 
 function react(p, type) {
@@ -708,16 +907,20 @@ function react(p, type) {
   void p.el.offsetWidth;
   let txt = "";
   if (type === "single") {
-    p.el.classList.add("bounce");
-    playPetAnim(p, "jump", 900);
+    if (!hasPetAnim(p, "jump")) p.el.classList.add("bounce");
+    const jump = p.sprite?.actions?.jump;
+    const jumpDuration = jump ? ((jump.count || 1) / (jump.fps || 8)) * 1000 + 200 : 900;
+    playPetAnim(p, "jump", jumpDuration);
     txt = pick(bubblePack(p).single);
   } else if (type === "double") {
-    p.el.classList.add("spin");
-    playPetAnim(p, "wave", 1100);
+    if (!hasPetAnim(p, "wave")) p.el.classList.add("spin");
+    const wave = p.sprite?.actions?.wave;
+    const waveDuration = wave ? ((wave.count || 1) / (wave.fps || 8)) * 1000 + 200 : 1100;
+    playPetAnim(p, "wave", waveDuration);
     txt = pick(bubblePack(p).double);
   } else if (type === "multi") {
-    p.el.classList.add("bounce");
-    playPetAnim(p, "happy", 1300);
+    if (!hasPetAnim(p, "happy")) p.el.classList.add("bounce");
+    playPetAnim(p, "happy", petAnimationDuration(p, "happy", 1300));
     txt = pick(bubblePack(p).multi);
   } else {
     p.el.classList.add("shake");
@@ -733,8 +936,19 @@ function hasPetAnim(p, name) {
 }
 
 function playPetAnim(p, name, duration) {
-  if (!hasPetAnim(p, name)) return;
-  p.transientAnim = name;
+  // Built-in pets can unlock actions gradually. Never leave a generic
+  // interaction stranded on a frozen frame just because its named animation
+  // has not been created for that pet yet.
+  const fallback = {
+    waiting: "idleSit",
+    jump: "stretch",
+    wave: "groom",
+    happy: "stretch",
+    failed: "idleSit",
+  };
+  const action = hasPetAnim(p, name) ? name : fallback[name];
+  if (!action || !hasPetAnim(p, action)) return;
+  p.transientAnim = action;
   p.transientUntil = Date.now() + duration;
 }
 
@@ -747,6 +961,57 @@ function bubble(p, txt, alert) {
   b.style.left = pr.left + pr.width / 2 - b.offsetWidth / 2 + "px";
   b.style.top = pr.top - 38 + "px";
   setTimeout(() => b.remove(), alert ? 3200 : 1800);
+}
+
+const PET_ACTION_LABELS = {
+  idle: "站立待机", idleSit: "坐姿待机", lookAround: "好奇张望", sleep: "趴下睡觉", groom: "舔爪洗脸", stretch: "伸懒腰", yawn: "打哈欠", walkRight: "向右走", walkLeft: "向左走", walk: "走一走",
+  wave: "挥爪", jump: "跳跃", failed: "委屈", waiting: "等待",
+  working: "工作", review: "查看", happy: "开心", eat: "吃东西",
+};
+
+let actionMenu = null;
+let actionMenuTimer = null;
+
+function closePetActionMenu() {
+  clearTimeout(actionMenuTimer);
+  actionMenu?.remove();
+  actionMenu = null;
+  reportHotspots(true);
+}
+
+function showPetActionMenu(p, x, y) {
+  closePetActionMenu();
+  const actions = Object.entries(p.sprite?.actions || {});
+  if (!actions.length) {
+    bubble(p, "我暂时还没有可用动作。", false);
+    return;
+  }
+  const menu = document.createElement("div");
+  menu.className = "pet-action-menu";
+  menu.innerHTML = `<div class="pet-action-menu-title">${escapeAttr(p.name)} 的动作</div>${actions.map(([name]) =>
+    `<button type="button" data-action="${escapeAttr(name)}">${escapeAttr(PET_ACTION_LABELS[name] || name)}</button>`
+  ).join("")}`;
+  document.body.appendChild(menu);
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  menu.style.left = Math.max(8, Math.min(innerWidth - width - 8, x)) + "px";
+  menu.style.top = Math.max(8, Math.min(innerHeight - height - 8, y)) + "px";
+  menu.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const name = button.dataset.action;
+    const config = p.sprite.actions[name];
+    const duration = Math.max(900, ((config.count || 1) / (config.fps || 8)) * 1000 + 350);
+    p.rest = 0;
+    p.idleAnim = p.sprite?.defaultIdle || "idle";
+    playPetAnim(p, name, duration);
+    setMood(p, `正在${PET_ACTION_LABELS[name] || name}`, duration);
+    bubble(p, `来一个${PET_ACTION_LABELS[name] || name}~`, false);
+    closePetActionMenu();
+  });
+  actionMenu = menu;
+  reportHotspots(true);
+  actionMenuTimer = setTimeout(closePetActionMenu, 7000);
 }
 
 // ===== sprite 帧动画：状态机 + 切帧 =====
@@ -763,7 +1028,8 @@ function spriteAnimFor(p) {
     if (p.vx > 0.05 && hasPetAnim(p, "walkRight")) return "walkRight";
     return hasPetAnim(p, "walk") ? "walk" : "idle";
   }
-  return "idle";
+  const defaultIdle = s.defaultIdle && hasPetAnim(p, s.defaultIdle) ? s.defaultIdle : "idle";
+  return defaultIdle;
 }
 
 // 每帧推进动画时钟，按 fps 切 background-position
@@ -790,8 +1056,18 @@ function tickSprite(p, now) {
       idx = act.count - 1;
     }
   }
-  const x = -(idx * p.size);
-  const y = -((act.row || 0) * p.size);
+  const grid = act.grid || s.grid || spriteGrid(s);
+  const source = act.src || s.src;
+  const sheetKey = `${source}|${grid.cols}x${grid.rows}|${p.size}`;
+  if (p.spriteSheetKey !== sheetKey) {
+    p.bodyEl.style.backgroundImage = 'url("' + source + '")';
+    p.bodyEl.style.backgroundSize = grid.cols * p.size + "px " + grid.rows * p.size + "px";
+    p.spriteSheetKey = sheetKey;
+  }
+  const frameIndex = (act.start || 0) + idx;
+  const x = -((frameIndex % grid.cols) * p.size);
+  const y = -(((act.row || 0) + Math.floor(frameIndex / grid.cols)) * p.size);
+  p.bodyEl.style.transform = act.flipX ? "scaleX(-1)" : "";
   p.bodyEl.style.backgroundPosition = x + "px " + y + "px";
 }
 
@@ -814,14 +1090,147 @@ function movePetToward(p, targetX, targetY, speed) {
   return false;
 }
 
+// ===== 多宠物社交 =====
+// 只保存为运行时状态：互动结束后各自继续原有的游走，不影响用户的档案与设置。
+let nextSocialAt = Date.now() + 8000;
+
+function socialEligible(p) {
+  return p.el && p.state === "wander" && !p.dragging && !p.attentionMode && !p.social;
+}
+
+function socialPoint(p, x, y) {
+  return {
+    x: Math.max(8, Math.min(innerWidth - p.size - 8, x)),
+    y: Math.max(8, Math.min(innerHeight - p.size - 8, y)),
+  };
+}
+
+function socialAnimation(p, duration) {
+  const choices = ["wave", "happy", "jump", "stretch", "lookAround", "idleSit", "idle"];
+  const action = choices.find((name) => hasPetAnim(p, name));
+  if (action) playPetAnim(p, action, duration);
+}
+
+function beginSocialMoment(a, b) {
+  if (!a.social || !b.social || a.social.phase !== "approach" || b.social.phase !== "approach") return;
+  const now = Date.now();
+  const duration = 2600;
+  a.social.phase = "perform";
+  b.social.phase = "perform";
+  a.social.until = now + duration;
+  b.social.until = now + duration;
+  const play = a.social.type === "play";
+  socialAnimation(a, duration);
+  socialAnimation(b, duration);
+  setMood(a, play ? `正在和${b.name}玩耍` : `正在和${b.name}打招呼`, duration);
+  setMood(b, play ? `正在和${a.name}玩耍` : `正在和${a.name}打招呼`, duration);
+  bubble(a, play ? "一起玩一会吧！" : "嗨，你好呀~", false);
+  bubble(b, play ? "好呀好呀！" : "见到你啦！", false);
+}
+
+function endSocialMoment(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const length = Math.hypot(dx, dy) || 1;
+  [[a, dx / length, dy / length], [b, -dx / length, -dy / length]].forEach(([p, vx, vy]) => {
+    p.social = null;
+    if (p.state === "social") p.state = "wander";
+    p.vx = vx * 1.1;
+    p.vy = vy * 0.8;
+  });
+}
+
+function tickSocialInteraction(p) {
+  const social = p.social;
+  const partner = social && pets.find((item) => item.id === social.partnerId && item.el);
+  if (!social || !partner || !partner.social) {
+    p.social = null;
+    if (p.state === "social") p.state = "wander";
+    return false;
+  }
+  if (social.phase === "approach") {
+    social.arrived = movePetToward(p, social.target.x, social.target.y, 3.1);
+    p.el.style.left = p.x + "px";
+    p.el.style.top = p.y + "px";
+    if (social.arrived && partner.social.arrived) beginSocialMoment(p, partner);
+    return true;
+  }
+  if (social.phase === "perform") {
+    p.vx = 0;
+    p.vy = 0;
+    if (Date.now() >= social.until) endSocialMoment(p, partner);
+    return true;
+  }
+  return false;
+}
+
+function startSocialInteraction(a, b) {
+  const now = Date.now();
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const midpointX = (a.x + b.x) / 2;
+  const midpointY = (a.y + b.y) / 2;
+  const gap = Math.max(a.size, b.size) * 0.7;
+  a.social = {
+    partnerId: b.id,
+    phase: "approach",
+    arrived: false,
+    type: Math.random() < 0.5 ? "greet" : "play",
+    target: socialPoint(a, midpointX - (dx / length) * gap, midpointY - (dy / length) * gap),
+  };
+  b.social = {
+    partnerId: a.id,
+    phase: "approach",
+    arrived: false,
+    type: a.social.type,
+    target: socialPoint(b, midpointX + (dx / length) * gap, midpointY + (dy / length) * gap),
+  };
+  a.state = "social";
+  b.state = "social";
+  a.rest = 0;
+  b.rest = 0;
+  setMood(a, `想找${b.name}玩`, 7000);
+  setMood(b, `注意到${a.name}`, 7000);
+}
+
+function maybeStartSocialInteraction() {
+  const now = Date.now();
+  if (now < nextSocialAt) return;
+  nextSocialAt = now + 40000 + Math.random() * 40000;
+  const candidates = activePets().filter(socialEligible);
+  if (candidates.length < 2) return;
+  let pair = null;
+  let nearest = Infinity;
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      const distance = Math.hypot(candidates[i].x - candidates[j].x, candidates[i].y - candidates[j].y);
+      if (distance < nearest) {
+        nearest = distance;
+        pair = [candidates[i], candidates[j]];
+      }
+    }
+  }
+  if (pair && nearest < 520) startSocialInteraction(pair[0], pair[1]);
+}
+
 function loop() {
-  const now = performance.now();
-  activePets().forEach((p) => {
+  // Schedule first: a transient DOM/texture error must never permanently stop
+  // the desktop pet on its current sprite frame.
+  requestAnimationFrame(loop);
+  try {
+    const now = performance.now();
+    maybeStartSocialInteraction();
+    activePets().forEach((p) => {
     if (p.dragging) {
       if (p.sprite) tickSprite(p, now);
       return;
     }
     if (p.state === "alert") {
+      if (p.sprite) tickSprite(p, now);
+      return;
+    }
+    if (p.social && tickSocialInteraction(p)) {
       if (p.sprite) tickSprite(p, now);
       return;
     }
@@ -884,8 +1293,10 @@ function loop() {
     p.el.style.left = p.x + "px";
     p.el.style.top = p.y + "px";
     if (p.sprite) tickSprite(p, now);
-  });
-  requestAnimationFrame(loop);
+    });
+  } catch (error) {
+    console.error("[pet] animation frame recovered", error);
+  }
 }
 
 // 把当前可交互区域（宠物/面板/展开按钮）的矩形上报给 Rust，用于动态切换穿透/捕获
@@ -904,6 +1315,10 @@ function reportHotspots(force = false) {
     if (r.width && r.height)
       hs.push({ x: r.left - 10, y: r.top - 10, w: r.width + 20, h: r.height + 20 });
   });
+  if (actionMenu) {
+    const r = actionMenu.getBoundingClientRect();
+    if (r.width && r.height) hs.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+  }
   const panel = document.getElementById("panel");
   if (panel && !panel.classList.contains("collapsed")) {
     const r = panel.getBoundingClientRect();
@@ -989,12 +1404,25 @@ async function init() {
     pets = [];
     idc = 0;
     (profiles || []).forEach((p) => {
+      if (p.sprite?.presetId === "fenzai-v1") {
+        const official = createFenzaiProfile();
+        // 内置动作配置随版本更新，但用户在仓库里换过的封面必须保留。
+        p = { ...p, src: official.src, cover: p.cover || official.cover, sprite: official.sprite };
+      }
       const isOldDemo = p.name === "示例精灵" && p.mode === "sprite" && p.sprite && String(p.sprite.src || "").startsWith("data:image/svg+xml");
       if (isOldDemo) { p.src = DEMO_SPRITE.src; p.sprite = DEMO_SPRITE; p.cover = DEMO_SPRITE.cover; p.name = "莓啵"; }
       spawnPet(p, p.status);
     });
   }
+  // 旧版把上传内容存成 Base64；只由主窗迁移一次，避免双窗口重复写文件。
+  const migratedLegacyAssets = IS_PANEL && await migrateLegacyAssets(saved);
   loadProfiles(saved);
+  if (migratedLegacyAssets) await persist();
+  // 仅控制面板负责补齐内置宠物，避免两个窗口同时持久化部分 pets 数组。
+  if (IS_PANEL && !pets.some((p) => p.sprite?.presetId === "fenzai-v1")) {
+    spawnPet(createFenzaiProfile());
+    await persist();
+  }
   applySettingsToUI();
   await listen("store-changed", (event) => {
     const payload = event.payload || {};
@@ -1018,6 +1446,7 @@ async function init() {
 }
 
 function setupPanel() {
+  setupCoverCropper();
   const viewCopy = {
     upload: ["上传宠物", "把喜欢的伙伴带到桌面上吧"], warehouse: ["宠物仓库", "管理每一位桌面伙伴"],
     actions: ["动作管理", "查看精灵的动作配置"], reminders: ["提醒事项", "让宠物在需要时来叫你"], settings: ["设置", "调整陪伴节奏"],
@@ -1037,12 +1466,26 @@ function setupPanel() {
   document.getElementById("attentionMinutes").addEventListener("change", (e) => { settings.attentionMinutes = Math.max(1, Math.min(240, parseInt(e.target.value) || 20)); e.target.value = settings.attentionMinutes; persist(); });
   document.getElementById("attentionEnabled").addEventListener("click", (e) => { settings.attentionEnabled = !e.currentTarget.classList.contains("on"); e.currentTarget.classList.toggle("on", settings.attentionEnabled); e.currentTarget.setAttribute("aria-checked", String(settings.attentionEnabled)); persist(); });
   document.getElementById("speechStyle").addEventListener("change", (e) => { settings.speechStyle = e.target.value; persist(); });
-  document.getElementById("petSize").addEventListener("input", (e) => { settings.petSize = Math.max(70, Math.min(180, Number(e.target.value) || 120)); document.getElementById("petSizeValue").textContent = settings.petSize + " px"; });
+  document.getElementById("actionPetSelect").addEventListener("change", (e) => { settings.actionPetId = Number(e.target.value); renderActionManager(); });
+  const applyPetSize = (value) => {
+    const size = normalizedPetSize(value);
+    if (settings.petSizeScope === "single") {
+      const p = pets.find((item) => item.id === Number(settings.petSizePetId));
+      if (p) resizePet(p, size);
+    } else {
+      settings.petSize = size;
+      pets.forEach((p) => resizePet(p, size));
+    }
+    document.getElementById("petSizeValue").textContent = size + " px";
+  };
+  document.getElementById("petSizeScope").addEventListener("change", (e) => { settings.petSizeScope = e.target.value; if (settings.petSizeScope === "single" && !pets.some((p) => p.id === Number(settings.petSizePetId))) settings.petSizePetId = pets[0]?.id || null; applySettingsToUI(); persist(); });
+  document.getElementById("petSizeTarget").addEventListener("change", (e) => { settings.petSizePetId = Number(e.target.value); applySettingsToUI(); persist(); });
+  document.getElementById("petSize").addEventListener("input", (e) => applyPetSize(e.target.value));
   document.getElementById("petSize").addEventListener("change", () => persist());
   const wh = document.getElementById("petWarehouse");
   wh.addEventListener("input", (e) => { const card = e.target.closest(".pet-card"); const p = card && pets.find((x) => x.id == card.dataset.id); if (!p) return; if (e.target.classList.contains("p-name")) p.name = e.target.value; else if (e.target.classList.contains("p-hobby")) p.hobby = e.target.value; else if (e.target.classList.contains("p-personality")) p.personality = e.target.value; persist(); });
-  wh.addEventListener("click", (e) => { const card = e.target.closest(".pet-card"); const p = card && pets.find((x) => x.id == card.dataset.id); if (!p) return; if (e.target.classList.contains("p-toggle")) p.status === "active" ? storePet(p.id) : releasePet(p.id); else if (e.target.classList.contains("p-cover")) { coverTargetId = p.id; document.getElementById("coverFile").click(); } else if (e.target.classList.contains("p-del")) { if (card.classList.contains("confirming")) deletePet(p.id); else { card.classList.add("confirming"); e.target.textContent = "确认?"; setTimeout(() => { if (card.isConnected) { card.classList.remove("confirming"); e.target.textContent = "✕"; } }, 2000); } } });
-  document.getElementById("coverFile").addEventListener("change", (e) => { const file = e.target.files?.[0]; const p = pets.find((item) => item.id === coverTargetId); if (!file || !p) return; const reader = new FileReader(); reader.onload = (event) => { p.cover = event.target.result; persist(); renderWarehouse(); }; reader.readAsDataURL(file); e.target.value = ""; });
+  wh.addEventListener("click", (e) => { const card = e.target.closest(".pet-card"); const p = card && pets.find((x) => x.id == card.dataset.id); if (!p) return; if (e.target.classList.contains("p-toggle")) p.status === "active" ? storePet(p.id) : releasePet(p.id); else if (e.target.classList.contains("p-cover")) { coverTargetId = p.id; document.getElementById("coverFile").click(); } else if (e.target.classList.contains("p-del") && !e.target.disabled) { if (card.classList.contains("confirming")) deletePet(p.id); else { card.classList.add("confirming"); e.target.textContent = "确认?"; setTimeout(() => { if (card.isConnected) { card.classList.remove("confirming"); e.target.textContent = "✕"; } }, 2000); } } });
+  document.getElementById("coverFile").addEventListener("change", (e) => { const file = e.target.files?.[0]; const p = pets.find((item) => item.id === coverTargetId); if (file && p) openCoverCropper(file); e.target.value = ""; });
   document.getElementById("addReminder").addEventListener("click", () => { settings.reminders.push({ id: "r" + Date.now(), label: "", type: "time", time: "12:00", interval: 30, message: "", repeat: "daily", enabled: true }); renderReminders(); persist(); });
   const list = document.getElementById("reminderList");
   const changeReminder = (e) => { const row = e.target.closest(".reminder"); const r = row && settings.reminders.find((x) => x.id === row.dataset.id); if (!r) return; if (e.target.classList.contains("r-label")) r.label = e.target.value; else if (e.target.classList.contains("r-time")) r.time = e.target.value; else if (e.target.classList.contains("r-msg")) r.message = e.target.value; else if (e.target.classList.contains("r-repeat")) r.repeat = e.target.value; else if (e.target.classList.contains("r-interval")) r.interval = parseInt(e.target.value) || 1; else if (e.target.classList.contains("r-enabled")) r.enabled = e.target.checked; else if (e.target.classList.contains("r-type")) { r.type = e.target.value; renderReminders(); } persist(); };

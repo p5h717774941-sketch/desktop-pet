@@ -1,5 +1,30 @@
 use tauri::Manager;
 use std::sync::{Mutex, OnceLock};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+// 用户导入的宠物图片不写进 settings.json：保存到应用数据目录，设置中只留 asset:// 路径。
+#[tauri::command]
+fn save_user_asset(app: tauri::AppHandle, filename: String, data_base64: String) -> Result<String, String> {
+    // 限制为约 25MB 原始图片，避免异常输入占满应用数据目录。
+    if data_base64.len() > 35 * 1024 * 1024 {
+        return Err("图片过大，请选择 25MB 以内的文件".into());
+    }
+    let bytes = STANDARD.decode(data_base64).map_err(|_| "无法读取图片数据".to_string())?;
+    let extension = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty() && s.len() <= 10 && s.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("png");
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("assets");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let path = dir.join(format!("pet-{}.{}", nonce, extension));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
 
 // 热区：前端实时上报，坐标相对窗口 content 左上原点（与 getBoundingClientRect 对齐）
 #[derive(Clone, Copy, Default)]
@@ -279,7 +304,7 @@ pub fn run() {
             windows::install();
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![set_hotspots, get_cursor_position])
+        .invoke_handler(tauri::generate_handler![set_hotspots, get_cursor_position, save_user_asset])
         .on_window_event(|window, event| {
             // 关闭控制面板不结束桌面宠物。macOS 收起到程序坞；Windows 最小化到任务栏，
             // 这样宠物窗不会作为独立任务栏项出现，主面板也能随时恢复。

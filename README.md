@@ -25,14 +25,15 @@ npm run tauri build      # 产物在 src-tauri/target/release/bundle/
 > 首次 `tauri dev` 会下载并编译 Tauri 全套依赖，约 3–8 分钟；之后增量编译很快。
 
 ## 已实现
-- 上传宠物图片（PNG/JPG，可一次选多张 = 多只宠物同屏）
+- 上传宠物图片（PNG/JPG，可一次选多张 = 多只宠物同屏）；上传文件保存到本机应用数据目录
 - 宠物在桌面随机游走、碰边反弹、偶尔发呆
 - 点击互动：单击蹦跳、双击转圈、连点 5 下炸毛，各带分级文字气泡
 - 自定义提醒：午饭 / 下班时间可设、健康提醒间隔可设
 - 提醒触发时宠物跳到屏幕中央放大 + 气泡喊你
 - 宠物窗与控制面板分离；控制面板可最小化，宠物窗保持透明置顶
 - macOS / Windows 的透明区动态鼠标穿透，宠物可点击、拖动、追随鼠标
-- 2D 精灵动作、日常行为、性格气泡、宠物状态小卡
+- 2D 精灵动作、日常行为、性格气泡、宠物状态小卡；粉仔内置 14 个行为动作
+- 宠物仓库支持自定义封面与 3:4 自由裁剪
 - 设置与宠物数据 **本地持久化**（Tauri store 插件），关掉再开还在
 - 🐭 黑鼠制作署名
 
@@ -55,8 +56,8 @@ npm run tauri build      # 产物在 src-tauri/target/release/bundle/
 推送 `v*` 格式的标签会触发 `.github/workflows/release.yml`，自动构建 macOS 与 Windows 安装包并创建 GitHub Release：
 
 ```bash
-git tag v1.10.4
-git push origin v1.10.4
+git tag v1.11
+git push origin v1.11
 ```
 
 Windows 会产出 NSIS `.exe`，macOS 会产出 `.dmg` / `.app`。
