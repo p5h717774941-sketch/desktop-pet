@@ -1,0 +1,130 @@
+[
+  {
+    "name": "momo-groom",
+    "source": "/Users/a754/Desktop/Pinkmo/坐姿舔爪.mp4",
+    "duration": 4.096009,
+    "sha256": "92387f5af4a7da7907587d0ed80afa17c604e6a7ac1fe73ed25341d7ef4ff779",
+    "frames": [
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-groom-1.png",
+        "seconds": 0.61440135,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-groom-2.png",
+        "seconds": 2.0480045,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-groom-3.png",
+        "seconds": 3.4816076499999995,
+        "size": [
+          1280,
+          720
+        ]
+      }
+    ]
+  },
+  {
+    "name": "momo-yawn",
+    "source": "/Users/a754/Desktop/Pinkmo/打哈欠.mp4",
+    "duration": 4.096009,
+    "sha256": "2fcd0c9e992bfe84dd101e776c520e59dca54df0d832b7167438bcd165635c98",
+    "frames": [
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-yawn-1.png",
+        "seconds": 0.61440135,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-yawn-2.png",
+        "seconds": 2.0480045,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-yawn-3.png",
+        "seconds": 3.4816076499999995,
+        "size": [
+          1280,
+          720
+        ]
+      }
+    ]
+  },
+  {
+    "name": "momo-sleep",
+    "source": "/Users/a754/Desktop/Pinkmo/趴下睡觉.mp4",
+    "duration": 4.096009,
+    "sha256": "73e4cf6b0fb0c40a39d6767255f24bd1e2476b5cc4be762c527e3e417325999d",
+    "frames": [
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-sleep-1.png",
+        "seconds": 0.61440135,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-sleep-2.png",
+        "seconds": 2.0480045,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/momo-sleep-3.png",
+        "seconds": 3.4816076499999995,
+        "size": [
+          1280,
+          720
+        ]
+      }
+    ]
+  },
+  {
+    "name": "fenzai-yawn",
+    "source": "/Users/a754/Desktop/Pinkmo/粉仔素材/打哈欠.mp4",
+    "duration": 4.096009,
+    "sha256": "88e2d15d306849aa1b09c920b720a3c1b944051b7500f1d971e1b9aed7076c65",
+    "frames": [
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/fenzai-yawn-1.png",
+        "seconds": 0.61440135,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/fenzai-yawn-2.png",
+        "seconds": 2.0480045,
+        "size": [
+          1280,
+          720
+        ]
+      },
+      {
+        "path": "/private/tmp/pinkmo-matting-eval/source-frames/fenzai-yawn-3.png",
+        "seconds": 3.4816076499999995,
+        "size": [
+          1280,
+          720
+        ]
+      }
+    ]
+  }
+]

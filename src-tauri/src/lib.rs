@@ -1,4 +1,5 @@
 use tauri::Manager;
+mod matting;
 use std::sync::{Mutex, OnceLock};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -98,6 +99,62 @@ mod macos {
         CGEventType,
     };
     use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        // 鼠标钩子运行在 macOS 的 C 回调里。这里绝不能因一次锁中毒而 panic，
+        // 否则 panic 无法跨越 C 边界，会直接终止整个应用。
+        mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn handle_mouse_move(event: &core_graphics::event::CGEvent) {
+        // 先拷贝热区，避免持锁做耗时操作。
+        let (hotspots, current) = match STATE.get() {
+            Some(state) => {
+                let st = lock_recover(state);
+                (st.hotspots.clone(), st.ignore)
+            }
+            None => return,
+        };
+
+        let loc = event.location();
+        let mut target = current; // 默认不变
+        if let Some(app) = APP.get() {
+            if let Some(win) = app.get_webview_window("pet") {
+                if let Ok(pos) = win.outer_position() {
+                    // outer_position 是物理像素；CGEvent.location 是逻辑点；
+                    // 统一成逻辑点（与前端 getBoundingClientRect 一致）
+                    let scale = SCALE.get().copied().unwrap_or(1.0);
+                    let win_x = pos.x as f64 / scale;
+                    let win_y = pos.y as f64 / scale;
+
+                    let rel_x = loc.x - win_x;
+                    let rel_y = loc.y - win_y;
+                    if let Some(cursor) = CURSOR.get() {
+                        *lock_recover(cursor) = (rel_x, rel_y);
+                    }
+
+                    let hit = hotspots.iter().any(|r| {
+                        rel_x >= r.x && rel_x <= r.x + r.w && rel_y >= r.y && rel_y <= r.y + r.h
+                    });
+                    target = !hit;
+                }
+            }
+        }
+
+        // 命中热区 -> 需要捕获（可点击）；否则 -> 穿透
+        if target != current {
+            if let Some(app) = APP.get() {
+                if let Some(win) = app.get_webview_window("pet") {
+                    let _ = win.set_ignore_cursor_events(target);
+                    if let Some(state) = STATE.get() {
+                        lock_recover(state).ignore = target;
+                    }
+                    eprintln!("[pet] ignore -> {}", target);
+                }
+            }
+        }
+    }
 
     // 全局鼠标移动回调：判断鼠标是否落在某个热区，动态切换窗口穿透/捕获
     pub fn install() {
@@ -107,57 +164,9 @@ mod macos {
             CGEventTapOptions::Default,
             vec![CGEventType::MouseMoved],
             |_proxy, _etype, event| {
-                // 先拷贝热区，避免持锁做耗时操作
-                let (hotspots, current) = {
-                    let st = STATE.get().unwrap().lock().unwrap();
-                    (st.hotspots.clone(), st.ignore)
-                };
-
-                let loc = event.location();
-                let mut target = current; // 默认不变
-                if let Some(app) = APP.get() {
-                    if let Some(win) = app.get_webview_window("pet") {
-                        if let Ok(pos) = win.outer_position() {
-                            // outer_position 是物理像素；CGEvent.location 是逻辑点；
-                            // 统一成逻辑点（与前端 getBoundingClientRect 一致）
-                            let scale = SCALE.get().copied().unwrap_or(1.0);
-                            let win_x = pos.x as f64 / scale;
-                            let win_y = pos.y as f64 / scale;
-
-                            let rel_x = loc.x - win_x;
-                            let rel_y = loc.y - win_y;
-                            if let Some(cursor) = CURSOR.get() {
-                                *cursor.lock().unwrap() = (rel_x, rel_y);
-                            }
-
-                            let mut hit = false;
-                            for r in &hotspots {
-                                if rel_x >= r.x
-                                    && rel_x <= r.x + r.w
-                                    && rel_y >= r.y
-                                    && rel_y <= r.y + r.h
-                                {
-                                    hit = true;
-                                    break;
-                                }
-                            }
-                            target = !hit;
-                        }
-                    }
-                }
-
-                // 命中热区 -> 需要捕获（可点击）；否则 -> 穿透
-                if target != current {
-                    if let Some(app) = APP.get() {
-                        if let Some(win) = app.get_webview_window("pet") {
-                            let _ = win.set_ignore_cursor_events(target);
-                            if let Some(s) = STATE.get() {
-                                s.lock().unwrap().ignore = target;
-                            }
-                            eprintln!("[pet] ignore -> {}", target);
-                        }
-                    }
-                }
+                // CGEventTap 是 C 回调；任何 panic 都不能越过这个边界。
+                // 兜底后保持当前鼠标穿透状态，而不是让 Pinkmo 直接退出。
+                let _ = catch_unwind(AssertUnwindSafe(|| handle_mouse_move(event)));
                 CallbackResult::Keep
             },
         ) {
@@ -304,7 +313,9 @@ pub fn run() {
             windows::install();
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![set_hotspots, get_cursor_position, save_user_asset])
+        .invoke_handler(tauri::generate_handler![set_hotspots, get_cursor_position, save_user_asset,
+            matting::ai_component_status, matting::ai_component_install, matting::ai_component_cancel,
+            matting::ai_job_begin, matting::ai_job_frame, matting::ai_job_start, matting::ai_job_poll, matting::ai_job_cancel])
         .on_window_event(|window, event| {
             // 关闭控制面板不结束桌面宠物。macOS 收起到程序坞；Windows 最小化到任务栏，
             // 这样宠物窗不会作为独立任务栏项出现，主面板也能随时恢复。
@@ -321,6 +332,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            if let tauri::RunEvent::Exit = event { matting::shutdown(); }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 if let Some(main) = app.get_webview_window("main") {

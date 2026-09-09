@@ -1,0 +1,9 @@
+# Same numerical stack as the accepted local experiment; isolated from the app.
+numpy==2.5.2
+onnxruntime==1.29.0
+pillow==12.3.0
+scipy==1.18.1
+PyMatting==1.1.15
+numba==0.67.0
+llvmlite==0.49.0
+pyinstaller==6.22.2

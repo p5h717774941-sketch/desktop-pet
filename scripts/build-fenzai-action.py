@@ -4,31 +4,47 @@ import sys
 from PIL import Image
 
 
-if len(sys.argv) != 3:
-    raise SystemExit("usage: build-fenzai-action.py <frames-dir> <output.png>")
+if len(sys.argv) not in (3, 4):
+    raise SystemExit("usage: build-fenzai-action.py <frames-dir> <output.png> [cover.png]")
 
 input_dir = Path(sys.argv[1])
 output_path = Path(sys.argv[2])
+cover_path = Path(sys.argv[3]) if len(sys.argv) == 4 else None
 cell, cols, rows = 320, 6, 4
 
 
-def remove_blue(image: Image.Image) -> Image.Image:
+def remove_chroma_background(image: Image.Image) -> Image.Image:
     image = image.convert("RGBA")
+    corner_points = (
+        (0, 0),
+        (image.width - 1, 0),
+        (0, image.height - 1),
+        (image.width - 1, image.height - 1),
+    )
+    corner_average = tuple(
+        sum(image.getpixel(point)[channel] for point in corner_points) / len(corner_points)
+        for channel in range(3)
+    )
+    screen_is_green = (
+        corner_average[1] > corner_average[0] + 20
+        and corner_average[1] >= corner_average[2]
+    )
     pixels = image.load()
     for y in range(image.height):
         for x in range(image.width):
             red, green, blue, alpha = pixels[x, y]
-            # Remove the saturated studio blue while retaining green eyes,
-            # pink paws and warm-colored props such as the food bowl. The
-            # second branch also removes the dim blue halo that blue screens
-            # leave around very dark fur.
+            # Handle both the original studio-blue Fenzai clips and the newer
+            # green-screen Momo clips.  These conditions deliberately require
+            # a bright, strongly chromatic colour so dark fur remains intact.
             blue_dominance = blue - max(red, green)
-            if (
-                (blue > 72 and green > red and green - red > 9 and blue - red > 18)
-                or (blue > 32 and blue_dominance > 12)
-            ):
+            # Green reflections on black fur can still have a modest green
+            # dominance.  The actual screen in the supplied clips is much
+            # brighter, so keep a high brightness floor before keying it.
+            green_screen = green > 105 and green - red > 18 and green - blue > -12
+            blue_screen = blue > 72 and green > red and green - red > 9 and blue - red > 18
+            if (screen_is_green and green_screen) or (not screen_is_green and blue_screen):
                 pixels[x, y] = (0, 0, 0, 0)
-            elif blue_dominance > 3:
+            elif not screen_is_green and blue_dominance > 3:
                 # Despill the remaining semi-blue pixels so dark fur does
                 # not carry a cyan outline once composited on the desktop.
                 pixels[x, y] = (red, green, min(255, max(red, green) + 3), alpha)
@@ -39,7 +55,7 @@ paths = sorted(input_dir.glob("frame-*.png"))
 if len(paths) != 24:
     raise SystemExit(f"expected 24 frames, got {len(paths)}")
 
-frames = [remove_blue(Image.open(path)) for path in paths]
+frames = [remove_chroma_background(Image.open(path)) for path in paths]
 boxes = [frame.getbbox() for frame in frames]
 if any(box is None for box in boxes):
     raise SystemExit("a frame became empty after blue-screen cleanup")
@@ -77,6 +93,9 @@ for index, frame in enumerate(frames):
 
 output_path.parent.mkdir(parents=True, exist_ok=True)
 sheet.save(output_path)
+if cover_path:
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.crop((0, 0, cell, cell)).save(cover_path)
 print(
     {
         "frames": len(frames),

@@ -1,0 +1,30 @@
+[
+  {
+    "frame": "momo-groom-2",
+    "inference_seconds": 10.018732041993644,
+    "edge_seconds": 0.08956337501876988,
+    "refine_seconds": 0.2808072500047274,
+    "peak_rss_mb": 2377.015625
+  },
+  {
+    "frame": "momo-yawn-2",
+    "inference_seconds": 13.653205500013428,
+    "edge_seconds": 0.08596625001518987,
+    "refine_seconds": 0.26824841601774096,
+    "peak_rss_mb": 2687.140625
+  },
+  {
+    "frame": "momo-sleep-2",
+    "inference_seconds": 6.3949494999833405,
+    "edge_seconds": 0.07264741699327715,
+    "refine_seconds": 0.3479352919966914,
+    "peak_rss_mb": 4321.34375
+  },
+  {
+    "frame": "fenzai-yawn-2",
+    "inference_seconds": 6.5162609170074575,
+    "edge_seconds": 0.07435266699758358,
+    "refine_seconds": 0.25588958300068043,
+    "peak_rss_mb": 4321.34375
+  }
+]

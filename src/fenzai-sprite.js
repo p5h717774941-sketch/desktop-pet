@@ -2,6 +2,7 @@ import actionSheetUrl from "./assets/fenzai-actions.png";
 import cover from "./assets/fenzai-cover.png";
 import stretchSheetUrl from "./assets/fenzai-stretch.png";
 import yawnSheetUrl from "./assets/fenzai-yawn.png";
+import groomSheetUrl from "./assets/fenzai-groom.png";
 import lookAroundSheetUrl from "./assets/fenzai-lookaround.png";
 import sleepSheetUrl from "./assets/fenzai-sleep.png";
 import eatSheetUrl from "./assets/fenzai-eat.png";
@@ -16,7 +17,15 @@ import workingSheetUrl from "./assets/fenzai-working.png";
 const actions = {
   idle: { row: 0, start: 24, count: 24, fps: 6, loop: true },
   idleSit: { row: 0, start: 48, count: 24, fps: 6, loop: true },
-  groom: { row: 0, start: 72, count: 24, fps: 7, loop: false },
+  groom: {
+    src: `${groomSheetUrl}?sprite=3`,
+    grid: { cols: 6, rows: 4 },
+    row: 0,
+    start: 0,
+    count: 24,
+    fps: 7,
+    loop: false,
+  },
   stretch: {
     src: `${stretchSheetUrl}?sprite=2`,
     grid: { cols: 6, rows: 4 },

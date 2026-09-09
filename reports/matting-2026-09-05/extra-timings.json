@@ -1,0 +1,58 @@
+[
+  {
+    "frame": "momo-groom-1",
+    "inference_seconds": 6.991715291980654,
+    "edge_seconds": 0.08037154100020416,
+    "refine_seconds": 0.24410687500494532,
+    "peak_rss_mb": 3990.96875
+  },
+  {
+    "frame": "momo-groom-3",
+    "inference_seconds": 8.157800624991069,
+    "edge_seconds": 0.08069479200639762,
+    "refine_seconds": 0.2243554999877233,
+    "peak_rss_mb": 3990.96875
+  },
+  {
+    "frame": "momo-yawn-1",
+    "inference_seconds": 6.310336458001984,
+    "edge_seconds": 0.08377045800443739,
+    "refine_seconds": 0.23709904201678,
+    "peak_rss_mb": 4033.171875
+  },
+  {
+    "frame": "momo-yawn-3",
+    "inference_seconds": 6.292480542004341,
+    "edge_seconds": 0.07678766699973494,
+    "refine_seconds": 0.22751666599651799,
+    "peak_rss_mb": 4312.4375
+  },
+  {
+    "frame": "momo-sleep-1",
+    "inference_seconds": 6.758507040998666,
+    "edge_seconds": 0.07216166699072346,
+    "refine_seconds": 0.3221731249941513,
+    "peak_rss_mb": 4312.4375
+  },
+  {
+    "frame": "momo-sleep-3",
+    "inference_seconds": 6.762374166981317,
+    "edge_seconds": 0.09110266700736247,
+    "refine_seconds": 0.3457937919883989,
+    "peak_rss_mb": 4312.4375
+  },
+  {
+    "frame": "fenzai-yawn-1",
+    "inference_seconds": 6.780132457992295,
+    "edge_seconds": 0.08000691700726748,
+    "refine_seconds": 0.24960574999568053,
+    "peak_rss_mb": 4312.4375
+  },
+  {
+    "frame": "fenzai-yawn-3",
+    "inference_seconds": 6.786771584011149,
+    "edge_seconds": 0.07448324997676536,
+    "refine_seconds": 0.2572107920132112,
+    "peak_rss_mb": 4312.4375
+  }
+]

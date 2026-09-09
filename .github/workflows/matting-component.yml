@@ -1,0 +1,38 @@
+name: Build optional AI component
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  component:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos-arm64
+          - os: windows-latest
+            target: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install isolated worker build dependencies
+        run: python -m pip install -r components/matting/requirements.txt
+      - name: Download pinned model
+        shell: bash
+        run: curl --fail --location --retry 3 --output model.onnx 'https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/main/onnx/model.onnx'
+      - name: Test worker contracts
+        run: python -m unittest discover -s components/matting -p 'test_*.py'
+      - name: Build component (verifies model SHA256)
+        run: python components/matting/build.py --model model.onnx --output component-output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinkmo-matting-v1-${{ matrix.target }}
+          path: component-output/*
+          retention-days: 14

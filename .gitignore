@@ -33,3 +33,11 @@ src-tauri/target/release/bundle/
 *.dmg
 *.exe
 *.zip
+
+# Local AI matting review artifacts (raw video frames and generated sheets)
+.pinkmo-work/
+
+# Local runtime/cache artifacts
+:memory:.ses
+__pycache__/
+*.pyc
