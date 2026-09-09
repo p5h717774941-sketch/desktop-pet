@@ -27,16 +27,17 @@ python components/matting/build.py --model /absolute/path/model.onnx --output /a
 必须在 Apple Silicon 上运行；Windows x64 必须在 Windows 上构建和实测。
 Python 和依赖都封装在组件中，最终用户不需要自行安装。
 
-## 发布（维护者明确操作，当前不会自动推送/发布）
+## 发布与许可证（维护者操作）
 
-先提交代码并手动运行 GitHub 的 `Build optional AI component` 工作流，
-下载两个平台的 artifacts，解开 artifact 外层，得到各平台 zip/json。
-完成真机测试后，将它们发布为独立的 `ai-matting-v1` release assets：
+先提交代码并手动运行 GitHub 的 `Build optional AI component` 工作流。
+工作流会在 macOS Apple Silicon 与 Windows x64 上分别构建、校验模型哈希、
+运行 worker 测试，并把 ZIP/JSON 暂存为 artifacts；默认还会自动建立或更新
+独立的 `ai-matting-v1` Release。
 
-```sh
-gh release create ai-matting-v1 --title 'Pinkmo 本地 AI 动作制作组件 v1' --notes '可选下载；仅制作动作时使用。'
-gh release upload ai-matting-v1 component-output/pinkmo-matting-v1-macos-arm64.zip component-output/pinkmo-matting-v1-macos-arm64.json component-output/pinkmo-matting-v1-windows-x64.zip component-output/pinkmo-matting-v1-windows-x64.json
-```
+Release 文案必须说明：视频与图片仅在本地处理、模型为 BiRefNet Lite ONNX、
+处理结果需由用户预览确认。每个组件 ZIP 都必须保留 `licenses/` 中的
+`BiRefNet-LICENSE.txt`、`THIRD_PARTY.md` 与依赖许可证；不得删除或改写模型
+版权与许可证文本。
 
 仓库固定为 `p5h717774941-sketch/desktop-pet`。下载器只接受固定来源、平台和
 文件名，经 HTTPS 获取清单，校验 zip 大小和 SHA256，安全解压（拒绝越界、
@@ -44,5 +45,6 @@ gh release upload ai-matting-v1 component-output/pinkmo-matting-v1-macos-arm64.z
 无管理员权限要求。模型原始许可和依赖许可随组件分发。
 
 未发布资源时，应用明确显示「组件尚未发布」，不会假装安装成功。
-不要覆盖已发布 v1；升级组件应同时更新后端固定版本和工作流文件名。
+不要覆盖已发布的组件文件；同一 v1 如需修复，只能在确认兼容后更新 Release，
+重大升级应同时更新后端固定版本、协议与工作流文件名。
 本地 Mac 测试通过不代表 Windows 真机或所有 macOS 版本已通过。

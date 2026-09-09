@@ -1,10 +1,19 @@
 name: Build optional AI component
 
 on:
+  push:
+    tags:
+      - 'ai-matting-v*'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Build and publish/update the ai-matting-v1 component release'
+        required: true
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   component:
@@ -36,3 +45,29 @@ jobs:
           name: pinkmo-matting-v1-${{ matrix.target }}
           path: component-output/*
           retention-days: 14
+
+  publish:
+    name: Publish optional AI component
+    needs: component
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified platform archives
+        uses: actions/download-artifact@v4
+        with:
+          path: component-artifacts
+
+      - name: Create or update component release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ai-matting-v1
+          name: Pinkmo 本地 AI 动作制作组件 v1
+          body: |
+            可选下载的本地 AI 动作制作组件，仅在制作动作视频时使用。
+
+            - 视频和图片仅在设备本地处理，不会上传到服务器。
+            - 内含 BiRefNet Lite ONNX（MIT License）及依赖许可证。
+            - 处理结果可能有毛边、漏抠或误抠，请在保存动作前预览确认。
+          files: |
+            component-artifacts/**/pinkmo-matting-v1-*.zip
+            component-artifacts/**/pinkmo-matting-v1-*.json
