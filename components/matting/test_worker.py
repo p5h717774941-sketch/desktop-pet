@@ -21,7 +21,8 @@ class WorkerContractTests(unittest.TestCase):
             self.assertFalse((root / 'progress.tmp').exists())
 
     def test_model_input_contract_is_fixed(self):
-        source = Path(__file__).with_name('worker.py').read_text()
+        # Source files are UTF-8; Windows' locale default may be a legacy code page.
+        source = Path(__file__).with_name('worker.py').read_text(encoding='utf-8')
         self.assertIn("providers=['CPUExecutionProvider']", source)
         self.assertIn('estimate_alpha_cf(rgb, trimap)', source)
         self.assertIn('estimate_foreground_ml(rgb, alpha)', source)
